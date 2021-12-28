@@ -37,26 +37,32 @@ void loop() {
   }
 
   if (err == TRF_ERR_SUCCESS) {
-    // Protocol v1
-    // DEVICE_ID        5 bits  (0 .. 31)
-    // prot_version     3 bits  (0 .. 7)
-    // packet_type      3 bits  (0 .. 7)
-    //
-    // packet_type == 1: sensor measurement
-    // voltage          3 bits  (0 .. 7)      0 - unknown
-    // unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
-    // timestamp        10 bits (0 .. 1023)   time since device started in units
-    // |       b0             |  |           b1           | |     b2      | |      b3      |
-    // x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
-    // DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val 
-    //
-    // packet_type == 2: share calibration data
-    // voltage          3 bits  (0 .. 7)      0 - unknown
-    // unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
-    // timestamp        10 bits (0 .. 1023)   time since device started in units
-    // |       b0             |  |           b1           | |     b2      | |      b3      |
-    // x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
-    // DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val  
+// Protocol v1
+// DEVICE_ID        5 bits  (0 .. 31)
+// prot_version     3 bits  (0 .. 7)
+// packet_type      3 bits  (0 .. 7)
+//
+// packet_type == 1: sensor measurement
+// voltage          3 bits  (0 .. 7)      0 - unknown
+// unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
+// timestamp        10 bits (0 .. 1023)   time since device started in units
+// |       b0             |  |           b1           | |     b2      | |      b3      |
+// x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
+// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val 
+//
+// packet_type == 2: share calibration data
+// voltage          3 bits  (0 .. 7)      0 - unknown
+// unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
+// timestamp        10 bits (0 .. 1023)   time since device started in units
+// V_min            3 bits  (0 .. 7)      0 - unknown; minimum voltage
+// V_max            3 bits  (0 .. 7)      0 - unknown; maximum voltage
+// Clbrtn__dry      6 bits  (0 .. 63)     calibration threshold for 'dry'
+// Clbrtn__wet      6 bits  (0 .. 63)     calibration threshold for 'wet'
+// Intrvl           3 bits  (0 .. 7)      index of interval for transmitting sensor measurements
+// NAS                                    Not Assigned
+// |       b0             |  |           b1           | |     b2      | |      b3      | |     b4      | |       b5       |
+// x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x  x x
+// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
 
 #ifdef DEBUG
     Serial.print(F("> "));
@@ -105,11 +111,56 @@ void loop() {
         Serial.print(F(" Measurement: "));
         Serial.println(measurement);
         return;
-      } else {
-        Serial.println(F("[PR] unsupported protocol version"));
+      }
+      else if (packetType == 2) { // calibration data
+        if (numRcvdBytes != 6) {
+          Serial.print(F("[PRv1-2] Invalid packet: Received "));
+          Serial.print(numRcvdBytes);
+          Serial.println(F(" bytes (expected 6)"));
+          return;
+        }
+        uint8_t voltage = b1 >> 2 & 0b111;
+        uint8_t unitTime = b1 & 0b11;
+        uint8_t b2 = buf[2],
+                b3 = buf[3],
+                b4 = buf[4],
+                b5 = buf[5];
+        uint16_t timeStamp = b2 << 2 | (b3 >> 6 & 0b11);
+        uint8_t V_min = b3 >> 3 & 0b111;
+        uint8_t V_max = b3 & 0b111;
+        uint8_t calibrationDry = (b4 >> 2) & 0b111111;
+        uint8_t calibrationWet = (b4 & 0b11) << 4 | (b5 >> 4);
+        uint8_t intervalIdx = (b5 >> 1) & 0b111;
+        const uint16_t MODE_INTERNAL_DURATIONS[] = {1, 15, 60, 240, 1440}; // in minutes
+
+        Serial.print(F("[PRv1-2] Voltage: "));
+        if (voltage) Serial.print(voltage);
+        else Serial.print(F("unknown"));
+        Serial.print(F(" Timestamp: "));
+        Serial.print(timeStamp);
+        Serial.print(((const char*[]){"s", "m", "h", "d"})[unitTime]);
+        Serial.print(F(" V_min: "));
+        if (V_min) Serial.print(V_min);
+        else Serial.print(F("unknown"));
+        Serial.print(F(" V_max: "));
+        if (V_max) Serial.print(V_max);
+        else Serial.print(F("unknown"));
+        Serial.print(F(" Calibration_dry: "));
+        Serial.print(calibrationDry);
+        Serial.print(F(" Calibration_wet: "));
+        Serial.print(calibrationWet);
+        Serial.print(F(" [Idx] Interval: ["));
+        Serial.print(intervalIdx);
+        Serial.print(F("] "));
+        Serial.println(MODE_INTERNAL_DURATIONS[intervalIdx]);
         return;
       }
-    } else {
+      else {
+        Serial.println(F("[PR] unsupported packet type"));
+        return;
+      }
+    }
+    else {
       Serial.println(F("[PR] unsupported protocol version"));
       return;
     }

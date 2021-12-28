@@ -14,7 +14,8 @@ const uint8_t DEVICE_ID = 9; // (0 .. 31) transmitted every time for receiver to
 const uint8_t PROTOCOL_VERSION = 1; // (0 .. 7)
 
 const uint8_t TX_REPEAT_MSG = 4;
-#define PACKET_SIZE 4
+#define PACKET_1_SIZE 4
+#define PACKET_2_SIZE 6
 
 //const int PIN_TX = 12; // hardcoded in tinyrf
 const uint8_t PIN_LED = 13;
@@ -36,11 +37,11 @@ const uint8_t     MODE_LED_MAIN_LEN = 4;
 const uint8_t     MODE_LED_CALIB_LEN = 6;
 const uint8_t     MODE_LED_INTERVAL_LEN = 8;
 
-const uint16_t    MODE_INTERNAL_LED[] = {250, 250, 250, 250, 250, 250, 250, 250, 250, 250};
-const uint16_t    MODE_INTERNAL_DURATIONS[] = {1, 15, 60, 240, 1440}; // in minutes
-const uint8_t     MODE_INTERNAL_DURATIONS_LEN = 5;
+const uint16_t    MODE_INTERVAL_LED[] = {250, 250, 250, 250, 250, 250, 250, 250, 250, 250};
+const uint16_t    MODE_INTERVAL_DURATIONS[] = {1, 15, 60, 240, 1440}; // in minutes
+const uint8_t     MODE_INTERVAL_DURATIONS_LEN = 5;
 
-const uint16_t*   MODE_CALIBRATION_LED = MODE_INTERNAL_LED;
+const uint16_t*   MODE_CALIBRATION_LED = MODE_INTERVAL_LED;
 
 const uint16_t    GOSLEEP_LED[] = {20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20};
 const uint8_t     GOSLEEP_LED_LEN = 20;
@@ -59,10 +60,11 @@ uint8_t sensorLastMeasurement = 0; // (0 .. 63)
 
 volatile bool isSleeping = false;
 volatile bool needToAutoLed = true; // if we need to blink when transmitting/sleeping (only happens after btn interrupt)
+bool needToSendCalibrations = false; // if calibration need to be transmitted before going to sleep
 
 uint8_t millisRolloverCount = 0;
 bool millisRolloverListening = false;
-uint8_t* txBuffer = new uint8_t[PACKET_SIZE];
+uint8_t* txBuffer = new uint8_t[max(PACKET_1_SIZE, PACKET_2_SIZE)];
 
 
 
@@ -82,7 +84,7 @@ void makeMeasurement() {
 }
 
 #ifdef DEBUG_SERIAL
-void hexBinDump();
+void hexBinDump(const uint8_t* buf, const uint8_t& len);
 #endif
 
 // Calculate unit (s/m/h/d) and corresponding value of time in these units
@@ -103,26 +105,38 @@ void retrieveTimeSinceStarted(uint8_t& _unit, uint16_t& _time) {
     time /= devisors[i];
   } while (++i <= 3);
 }
-  // Protocol v1
-  // DEVICE_ID        5 bits  (0 .. 31)
-  // prot_version     3 bits  (0 .. 7)
-  // packet_type      3 bits  (0 .. 7)
-  //
-  // packet_type == 1: sensor measurement
-  // voltage          3 bits  (0 .. 7)      0 - unknown
-  // unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
-  // timestamp        10 bits (0 .. 1023)   time since device started in units
-  // |       b0             |  |           b1           | |     b2      | |      b3      |
-  // x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
-  // DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val 
-  //
-  // packet_type == 2: share calibration data
-  // voltage          3 bits  (0 .. 7)      0 - unknown
-  // unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
-  // timestamp        10 bits (0 .. 1023)   time since device started in units
-  // |       b0             |  |           b1           | |     b2      | |      b3      |
-  // x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
-  // DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val   
+
+void transmit(const uint8_t& len) {
+#ifdef DEBUG_SERIAL
+  Serial.print(F("Transmitting packet: "));
+  hexBinDump(txBuffer, len);
+#endif
+  // time margin between transmissions
+  delayMicroseconds(TX_DELAY_MICROS);
+
+  if (needToAutoLed)
+    digitalWrite(PIN_LED, HIGH);
+  sendMulti((byte*)txBuffer, len, TX_REPEAT_MSG);
+  if (needToAutoLed)
+    digitalWrite(PIN_LED, LOW);
+#ifdef DEBUG_SERIAL
+  Serial.println(F("# Transmitted"));
+#endif
+}
+
+// Protocol v1
+// DEVICE_ID        5 bits  (0 .. 31)
+// prot_version     3 bits  (0 .. 7)
+// packet_type      3 bits  (0 .. 7)
+//
+// packet_type == 1: sensor measurement
+// voltage          3 bits  (0 .. 7)      0 - unknown
+// unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
+// timestamp        10 bits (0 .. 1023)   time since device started in units
+// sensor_val       6 bits  (0 .. 63)
+// |       b0             |  |           b1           | |     b2      | |      b3      |
+// x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
+// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val
 void transmitLastMeasurement() {
   uint8_t unit;
   uint16_t time;
@@ -139,24 +153,46 @@ void transmitLastMeasurement() {
   txBuffer[2] = b2;
   txBuffer[3] = b3;
   
-#ifdef DEBUG_SERIAL
-  Serial.print(F("Transmitting packet: "));
-  hexBinDump(txBuffer);
-#endif
-  
-  if (needToAutoLed)
-    digitalWrite(PIN_LED, HIGH);
-  sendMulti((byte*)txBuffer, PACKET_SIZE, TX_REPEAT_MSG);
-  if (needToAutoLed)
-    digitalWrite(PIN_LED, LOW);
-#ifdef DEBUG_SERIAL
-  Serial.println(F("# Transmitted"));
-#endif
+  transmit(PACKET_1_SIZE);
 }
 
-
+// packet_type == 2: share calibration data
+// voltage          3 bits  (0 .. 7)      0 - unknown
+// unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
+// timestamp        10 bits (0 .. 1023)   time since device started in units
+// V_min            3 bits  (0 .. 7)      0 - unknown; minimum voltage
+// V_max            3 bits  (0 .. 7)      0 - unknown; maximum voltage
+// Clbrtn__dry      6 bits  (0 .. 63)     calibration threshold for 'dry'
+// Clbrtn__wet      6 bits  (0 .. 63)     calibration threshold for 'wet'
+// Intrvl           3 bits  (0 .. 7)      index of interval for transmitting sensor measurements
+// NAS                                    Not Assigned
+// |       b0             |  |           b1           | |     b2      | |      b3      | |     b4      | |       b5      |
+// x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x   x
+// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
 void transmitCalibration() {
+  uint8_t unit;
+  uint16_t time;
+  retrieveTimeSinceStarted(unit, time);
+  
+  uint8_t b1 = 2 << 5; // packet_type = 1
+  // b1 |= 0 << 2; // TODO: voltage unknown for now
+  b1 |= unit & 0b11; // add units
+  uint8_t b2 = time >> 2 & 0xFF; // add big part of timestamp
+  uint8_t b3 = (time & 0b11) << 6; // add little part of timestamp
+  // b3 |= 0 << 3; // TODO: V_min unknown for now
+  // b3 |= 0; // TODO: V_max unknown for now
+  uint8_t b4 = (sensorThresholdDry & 0b111111) << 2; // add calibration for 'dry'
+  b4 |= (sensorThresholdWet & 0b111111) >> 4;
+  uint8_t b5 = (sensorThresholdWet & 0b1111) << 4;
+  b5 |= (intervalDurationIdx & 0b111) << 1;
 
+  txBuffer[1] = b1;
+  txBuffer[2] = b2;
+  txBuffer[3] = b3;
+  txBuffer[4] = b4;
+  txBuffer[5] = b5;
+  
+  transmit(PACKET_2_SIZE);
 }
 
 void measureAndTransmit() {
@@ -190,6 +226,12 @@ void handleWakeUp() {
 }
 
 void goToSleep() {
+  // send calibrations if smth has been changed
+  if (needToSendCalibrations) {
+    transmitCalibration();
+    needToSendCalibrations = false;
+  }
+
   if (needToAutoLed) {
     // flash with led
     for (uint8_t i = 0; i < GOSLEEP_LED_LEN; ++i) {
@@ -260,11 +302,11 @@ void loadFromEEPROM() {
   Serial.print(F("]"));
 #endif
   // Validate interval index
-  if (_interval < MODE_INTERNAL_DURATIONS_LEN) {
+  if (_interval < MODE_INTERVAL_DURATIONS_LEN) {
     intervalDurationIdx = _interval;
 #ifdef DEBUG_SERIAL
   Serial.print(F(" interval = "));
-  Serial.println(MODE_INTERNAL_DURATIONS[intervalDurationIdx]);
+  Serial.println(MODE_INTERVAL_DURATIONS[intervalDurationIdx]);
 #endif
   } else {
 #ifdef DEBUG_SERIAL
@@ -272,9 +314,11 @@ void loadFromEEPROM() {
   Serial.print(F("loadFromEEPROM() WARNING: validation failed - [idx] interval = ["));
   Serial.print(intervalDurationIdx);
   Serial.print(F("] "));
-  Serial.println(MODE_INTERNAL_DURATIONS[intervalDurationIdx]);
+  Serial.println(MODE_INTERVAL_DURATIONS[intervalDurationIdx]);
 #endif
   }
+  // Transmit all the calibrations after they are loaded
+  transmitCalibration();
 }
 
 void blinkLed(const uint8_t &len, const uint16_t *intervals) {
@@ -282,48 +326,76 @@ void blinkLed(const uint8_t &len, const uint16_t *intervals) {
   timerLed.restart();
 }
 
+void handleMenuMain() {
+  // Update goToSleepTimer every time btn is down in mode MAIN
+  if (btn.state()) {
+    timerIdleToSleep.restart();
+  }
+  if (btn.hasClicks(1)) {
+    // Send current data once
+    measureAndTransmit();
+  }
+  if (btn.hasClicks(2)) {
+    // Restart measuring and transmitting interval
+    timerTransmit.restart();
+#ifdef DEBUG_SERIAL
+    Serial.print(F(" => Transmission Timer restarted. millis() = "));
+    Serial.println(millis());
+#endif
+  }
+  // if (btn.hasClicks(3)) {
+  //   // something else (forgot what wanted to put here)
+  // }
+}
+
 void handleMenuCalibration() {
-    if (btn.hasClicks()) {
-      if (btn.clicks > 1 && btn.clicks < 4) {
-        blinkLed(btn.clicks * 2, MODE_INTERNAL_LED);
-        makeMeasurement();
-        if (btn.clicks == 2) {
-          sensorThresholdDry = sensorLastMeasurement;
-          EEPROM.write(EEPROM_IDX_THRESHOLD_DRY, sensorThresholdDry);
+  if (btn.hasClicks()) {
+    if (btn.clicks > 1 && btn.clicks < 4) {
+      blinkLed(btn.clicks * 2, MODE_INTERVAL_LED);
+      makeMeasurement();
+      if (btn.clicks == 2) {
+        sensorThresholdDry = sensorLastMeasurement;
+        EEPROM.write(EEPROM_IDX_THRESHOLD_DRY, sensorThresholdDry);
+        needToSendCalibrations = true; // calibrations will be transmitted before going to sleep
 #ifdef DEBUG_SERIAL
-  Serial.print(F("dry value updated: "));
-#endif
-        }
-        else {
-          sensorThresholdWet = sensorLastMeasurement;
-          EEPROM.write(EEPROM_IDX_THRESHOLD_WET, sensorThresholdWet);
-#ifdef DEBUG_SERIAL
-  Serial.print(F("wet value updated: "));
-#endif
-        }
-#ifdef DEBUG_SERIAL
-  Serial.print(F("(dry: "));
-  Serial.print(sensorThresholdDry);
-  Serial.print(F(", wet: "));
-  Serial.print(sensorThresholdWet);
-  Serial.println(F(")"));
+        Serial.print(F("dry value updated: "));
 #endif
       }
+      else {
+        sensorThresholdWet = sensorLastMeasurement;
+        EEPROM.write(EEPROM_IDX_THRESHOLD_WET, sensorThresholdWet);
+        needToSendCalibrations = true;
+#ifdef DEBUG_SERIAL
+        Serial.print(F("wet value updated: "));
+#endif
+      }
+#ifdef DEBUG_SERIAL
+    Serial.print(F("(dry: "));
+    Serial.print(sensorThresholdDry);
+    Serial.print(F(", wet: "));
+    Serial.print(sensorThresholdWet);
+    Serial.println(F(")"));
+#endif
+    } else if (btn.clicks == 1) {
+      // Single click in calibration mode sends calibration data
+      transmitCalibration();
     }
+  }
 }
 
 void handleMenuInterval() {
-    if (btn.hasClicks() && btn.clicks <= MODE_INTERNAL_DURATIONS_LEN) {
-      blinkLed(btn.clicks * 2, MODE_INTERNAL_LED);
-      intervalDurationIdx = btn.clicks - 1;
-      EEPROM.write(EEPROM_IDX_INTERVAL_DURATION_IDX, intervalDurationIdx);
-      timerTransmit.setTime(MODE_INTERNAL_DURATIONS[intervalDurationIdx] * 60000);
-      timerTransmit.restart();
+  if (btn.hasClicks() && btn.clicks <= MODE_INTERVAL_DURATIONS_LEN) {
+    blinkLed(btn.clicks * 2, MODE_INTERVAL_LED);
+    intervalDurationIdx = btn.clicks - 1;
+    EEPROM.write(EEPROM_IDX_INTERVAL_DURATION_IDX, intervalDurationIdx);
+    timerTransmit.setTime(MODE_INTERVAL_DURATIONS[intervalDurationIdx] * 60000);
+    timerTransmit.restart();
+    needToSendCalibrations = true;
 #ifdef DEBUG_SERIAL
-  Serial.print(F("new interval (in minutes): "));
-  Serial.println((uint16_t)MODE_INTERNAL_DURATIONS[intervalDurationIdx]);
+    Serial.print(F("new interval (in minutes): "));
+    Serial.println((uint16_t)MODE_INTERVAL_DURATIONS[intervalDurationIdx]);
 #endif
-    }
+  }
 }
 
 void handleMenuNext(const uint8_t nextMode, const uint8_t len, const uint16_t* intervals) {
@@ -331,13 +403,13 @@ void handleMenuNext(const uint8_t nextMode, const uint8_t len, const uint16_t* i
     blinkLed(len, intervals);
     mode = nextMode;
 #ifdef DEBUG_SERIAL
-  Serial.print(F("> mode: "));
-  if (mode == MODE_MAIN)
-    Serial.println(F("MAIN"));
-  else if (mode == MODE_CALIB)
-    Serial.println(F("CALIBRATION"));
-  else if (mode == MODE_INTERVAL)
-    Serial.println(F("INTERVAL"));
+    Serial.print(F("> mode: "));
+    if (mode == MODE_MAIN)
+      Serial.println(F("MAIN"));
+    else if (mode == MODE_CALIB)
+      Serial.println(F("CALIBRATION"));
+    else if (mode == MODE_INTERVAL)
+      Serial.println(F("INTERVAL"));
 #endif
   }
   // Stop goToSleep timer if not in mode MAIN
@@ -362,7 +434,7 @@ void setup() {
 
   loadFromEEPROM();
   timerTransmit.attach(measureAndTransmit);
-  timerTransmit.setTime(MODE_INTERNAL_DURATIONS[intervalDurationIdx] * 60000);
+  timerTransmit.setTime(MODE_INTERVAL_DURATIONS[intervalDurationIdx] * 60000);
   timerTransmit.restart();
 
   // Setup sleeping stuff
@@ -392,20 +464,7 @@ void loop() {
   // Main mode: wake up, get measurement, send measurement, sleep
   if (mode == MODE_MAIN) {
     handleMenuNext(MODE_CALIB, MODE_LED_CALIB_LEN, MODE_LED);
-    // Update goToSleepTimer every time btn is down in mode MAIN
-    if (btn.state()) {
-      timerIdleToSleep.restart();
-    }
-    if (btn.click()) {
-      // Send current data once
-      measureAndTransmit();
-    }
-    if (btn.hasClicks(2)) {
-      // Restart measuring and transmitting interval
-    }
-    if (btn.hasClicks(3)) {
-      // something else (forgot what wanted to put here)
-    }
+    handleMenuMain();
   }
   // Calibration mode: wait for button clicks for calibration
   else if (mode == MODE_CALIB) {
@@ -423,8 +482,8 @@ void loop() {
 
 
 #ifdef DEBUG_SERIAL
-void hexBinDump(const uint8_t* buf) {
-  for (int i = 0; i < PACKET_SIZE; ++i) {
+void hexBinDump(const uint8_t* buf, const uint8_t& len) {
+  for (int i = 0; i < len; ++i) {
     Serial.print(F("d"));
     byte mask = B10000000;
     if (buf[i] < 16) {
