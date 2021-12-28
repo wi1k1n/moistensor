@@ -5,7 +5,14 @@
 #include <GyverPower.h>
 #include <EEPROM.h>
 
+#define DEBUG
+#ifdef DEBUG
 #define DEBUG_SERIAL
+#endif
+
+const uint8_t DEVICE_ID = 9; // transmitted every time for receiver to distinguish between different devices
+const uint8_t TX_REPEAT_MSG = 4;
+#define PACKET_SIZE 10
 
 //const int PIN_TX = 12; // hardcoded in tinyrf
 const uint8_t PIN_LED = 13;
@@ -16,6 +23,7 @@ const uint8_t PIN_SENSOR = A2;
 EncButton<EB_TICK, PIN_BTN> btn;
 TimerLED timerLed(PIN_LED, true, false);
 TimerMs timerIdleToSleep(5000, 0, 1);
+TimerMs timerTransmit;
 
 #define MODE_MAIN     0
 #define MODE_CALIB    1
@@ -49,17 +57,114 @@ uint8_t sensorLastMeasurement = 0;
 
 bool isSleeping = false;
 
+uint8_t millisRolloverCount = 0;
+bool millisRolloverListening = false;
+uint8_t* txBuffer = new uint8_t[PACKET_SIZE];
+
+
+
+void setupTX() {
+  setupTransmitter();
+  txBuffer[0] = DEVICE_ID;
+  txBuffer[5] = 127;
+  txBuffer[6] = 255;
+}
+
+void makeMeasurement() {
+  sensorLastMeasurement = map(analogRead(PIN_SENSOR), 0, 1023, 0, 255);
+#ifdef DEBUG_SERIAL
+  Serial.print(F("makeMeasurement(): "));
+  Serial.println(sensorLastMeasurement);
+#endif
+}
+
+#ifdef DEBUG_SERIAL
+void hexBinDump();
+#endif
+
+// packet consists of N bytes:
+// b0     [uint8_t]   DEVICE_ID
+// b1-b4  [uint32_t]  time since device started (in seconds)
+// b5-b6  [uint16_t]  reserved
+// b7     [uint8_t]   sensor value
+// b8     [uint8_t]   sensor dry threshold
+// b9     [uint8_t]   sensor wet threshold
+void transmitLastMeasurement() {
+  uint32_t timeSeconds = millis() / 1000 + millisRolloverCount * 0xFFFFFFFFL / 1000;
+
+  txBuffer[1] = (uint8_t)(timeSeconds);
+  txBuffer[2] = (uint8_t)((timeSeconds >> 8) && 0xFF);
+  txBuffer[3] = (uint8_t)((timeSeconds >> 16) && 0xFF);
+  txBuffer[4] = (uint8_t)((timeSeconds >> 24) && 0xFF);
+  
+  txBuffer[7] = sensorLastMeasurement;
+  txBuffer[8] = sensorThresholdDry;
+  txBuffer[9] = sensorThresholdWet;
+  
+  send(txBuffer, PACKET_SIZE, TX_REPEAT_MSG);
+
+#ifdef DEBUG_SERIAL
+  Serial.println(F("Transmitting packet:"));
+  hexBinDump(txBuffer);
+#endif
+}
+
+void measureAndTransmit() {
+  makeMeasurement();
+  transmitLastMeasurement();
+}
+
+void millisRolloverHandle() {
+  if (!millisRolloverListening) {
+    if (millis() > 0x7FFFFFFFL) {
+      millisRolloverListening = true;
+    }
+  } else {
+    if (millis() < 0x7FFFFFFFL) {
+      millisRolloverCount++;
+      millisRolloverListening = false;
+    }
+  }
+}
 
 void handleWakeUp() {
   if (!isSleeping)
     return;
   detachInterrupt(BTN_INTERRUPT);
-#ifdef DEBUG_SERIAL
-  Serial.println("Interrupt Fired!");
-#endif
-  power.wakeUp();
   isSleeping = false;
-  timerIdleToSleep.restart();
+  power.wakeUp();
+#ifdef DEBUG_SERIAL
+  Serial.println("# Interrupt Fired!");
+#endif
+}
+
+void goToSleep() {
+      // flash with led
+      for (uint8_t i = 0; i < GOSLEEP_LED_LEN; ++i) {
+        digitalWrite(PIN_LED, i % 2 ? HIGH : LOW);
+        delay(GOSLEEP_LED[i]);
+      }
+      digitalWrite(PIN_LED, LOW);
+      
+      prepareForSleep();
+      attachInterrupt(BTN_INTERRUPT, handleWakeUp, LOW);
+#ifdef DEBUG_SERIAL
+  Serial.print(F("# Going to sleep for ~"));
+  Serial.print(timerTransmit.timeLeft() / 1000);
+  Serial.println(F(" seconds"));
+  delay(20);
+#endif
+      uint32_t timeLeftBeforeTx = timerTransmit.timeLeft();
+      power.sleepDelay(timeLeftBeforeTx);
+
+      // Continue here when woke up
+      timerIdleToSleep.restart();
+      if (isSleeping) {
+        // Here, if woke up by ourselves (not by interrupt)
+      }
+#ifdef DEBUG_SERIAL
+  Serial.println("# Just woke up!");
+#endif
 }
 
 void prepareForSleep() {
@@ -117,14 +222,6 @@ void loadFromEEPROM() {
   }
 }
 
-void makeMeasurement() {
-  sensorLastMeasurement = map(analogRead(PIN_SENSOR), 0, 1023, 0, 255);
-#ifdef DEBUG_SERIAL
-  Serial.print(F("makeMeasurement(): "));
-  Serial.println(sensorLastMeasurement);
-#endif
-}
-
 void handleMenuCalibration() {
     if (btn.hasClicks()) {
       if (btn.clicks > 1 && btn.clicks < 4) {
@@ -162,6 +259,8 @@ void handleMenuInterval() {
       timerLed.restart();
       intervalDurationIdx = btn.clicks - 1;
       EEPROM.write(EEPROM_IDX_INTERVAL_DURATION_IDX, intervalDurationIdx);
+      timerTransmit.setTime(MODE_INTERNAL_DURATIONS[intervalDurationIdx] * 60000);
+      timerTransmit.restart();
 #ifdef DEBUG_SERIAL
   Serial.print(F("new interval (in minutes): "));
   Serial.println((uint16_t)MODE_INTERNAL_DURATIONS[intervalDurationIdx]);
@@ -201,39 +300,24 @@ void setup() {
   Serial.println(F("Welcome to Remote Moisture Sensing deivce!"));
 #endif
 
-  setupTransmitter();
+  setupTX();
   pinMode(PIN_LED, OUTPUT);
 
   loadFromEEPROM();
+  timerTransmit.attach(measureAndTransmit);
+  timerTransmit.setTime(MODE_INTERNAL_DURATIONS[intervalDurationIdx] * 60000);
+  timerTransmit.restart();
+
+  // Setup sleeping stuff
+  power.autoCalibrate();
+  power.setSleepMode(POWERDOWN_SLEEP);
+
+  timerIdleToSleep.attach(goToSleep);
+  timerIdleToSleep.restart();
 
 #ifdef DEBUG_SERIAL
   Serial.println(F("> mode: MAIN"));
 #endif
-
-  // Setup sleeping stuff
-  power.autoCalibrate(); // автоматическая калибровка
-  power.setSleepMode(POWERDOWN_SLEEP);
-
-  timerIdleToSleep.attach([]() -> void {
-#ifdef DEBUG_SERIAL
-  Serial.println("Going to sleep!");
-#endif
-      // flash with led
-      for (uint8_t i = 0; i < GOSLEEP_LED_LEN; ++i) {
-        digitalWrite(PIN_LED, i % 2 ? HIGH : LOW);
-        delay(GOSLEEP_LED[i]);
-      }
-      digitalWrite(PIN_LED, LOW);
-      
-      prepareForSleep();
-      attachInterrupt(BTN_INTERRUPT, handleWakeUp, LOW);
-      power.sleepDelay(MODE_INTERNAL_DURATIONS[intervalDurationIdx] * 60000);
-
-#ifdef DEBUG_SERIAL
-  Serial.println("Just woke up!");
-#endif
-  });
-  timerIdleToSleep.restart();
 }
 
 
@@ -244,6 +328,8 @@ void loop() {
   btn.tick();
   timerLed.tick();
   timerIdleToSleep.tick();
+  timerTransmit.tick();
+  millisRolloverHandle();
 
   // Main mode: wake up, get measurement, send measurement, sleep
   if (mode == MODE_MAIN) {
@@ -254,6 +340,7 @@ void loop() {
     }
     if (btn.click()) {
       // Send current data once
+      measureAndTransmit();
     }
   }
   // Calibration mode: wait for button clicks for calibration
@@ -266,12 +353,32 @@ void loop() {
     handleMenuNext(MODE_MAIN, MODE_LED_MAIN_LEN, MODE_LED);
     handleMenuInterval();
   }
-
-//  if (btn.click()) {
-//    digitalWrite(PIN_LED, HIGH);
-//    const char* msg = "Hello from far away!";
-//    send((byte*)msg, strlen(msg), 4);
-//    delay(5);
-//    digitalWrite(PIN_LED, LOW);
-//  }
 }
+
+
+
+
+#ifdef DEBUG_SERIAL
+void hexBinDump(const uint8_t* buf) {
+  Serial.print(F("D "));
+  for (int i = 0; i < PACKET_SIZE; ++i) { 
+    byte mask = B10000000;
+    if (buf[i] < 16) {
+      Serial.print(F("0"));
+    }
+    Serial.print(buf[i], HEX);
+    Serial.print(F(" "));
+    for (int k = 0; k < 8; ++k) {
+      if (buf[i] & mask) {
+        Serial.print(F("1"));
+      }
+      else {
+        Serial.print(F("0"));
+      }
+      mask = mask >> 1;
+    }
+    Serial.print(F(" "));
+  }
+  Serial.println();
+}
+#endif
