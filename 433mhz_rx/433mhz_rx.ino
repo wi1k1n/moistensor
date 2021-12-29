@@ -60,9 +60,9 @@ void loop() {
 // Clbrtn__wet      6 bits  (0 .. 63)     calibration threshold for 'wet'
 // Intrvl           3 bits  (0 .. 7)      index of interval for transmitting sensor measurements
 // NAS                                    Not Assigned
-// |       b0             |  |           b1           | |     b2      | |      b3      | |     b4      | |       b5       |
-// x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x  x x
-// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
+// |       b0             | |           b1           | |     b2      | |      b3      | |     b4      | |       b5       |
+// x x x x x  x     x     x x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x  x x
+// DEVICE_ID  prot_version  packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
 
 #ifdef DEBUG
     Serial.print(F("> "));

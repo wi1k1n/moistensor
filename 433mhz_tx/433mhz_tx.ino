@@ -13,7 +13,7 @@
 const uint8_t DEVICE_ID = 9; // (0 .. 31) transmitted every time for receiver to distinguish between different devices
 const uint8_t PROTOCOL_VERSION = 1; // (0 .. 7)
 
-const uint8_t TX_REPEAT_MSG = 4;
+const uint8_t TX_REPEAT_MSG = 10;
 #define PACKET_1_SIZE 4
 #define PACKET_2_SIZE 6
 
@@ -112,7 +112,7 @@ void transmit(const uint8_t& len) {
   hexBinDump(txBuffer, len);
 #endif
   // time margin between transmissions
-  delayMicroseconds(TX_DELAY_MICROS);
+  // delayMicroseconds(TX_DELAY_MICROS);
 
   if (needToAutoLed)
     digitalWrite(PIN_LED, HIGH);
@@ -166,9 +166,9 @@ void transmitLastMeasurement() {
 // Clbrtn__wet      6 bits  (0 .. 63)     calibration threshold for 'wet'
 // Intrvl           3 bits  (0 .. 7)      index of interval for transmitting sensor measurements
 // NAS                                    Not Assigned
-// |       b0             |  |           b1           | |     b2      | |      b3      | |     b4      | |       b5      |
-// x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x   x
-// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
+// |       b0             | |           b1           | |     b2      | |      b3      | |     b4      | |       b5      |
+// x x x x x  x     x     x x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x   x
+// DEVICE_ID  prot_version  packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
 void transmitCalibration() {
   uint8_t unit;
   uint16_t time;
