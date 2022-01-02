@@ -32,7 +32,7 @@ Main menu consists of 3 modes, which can be changed by pressing and holding butt
 
 ## TODO list
 
-- Add 1 bit signifying if calibration data has happened right after MCU is powered up
-- No transmissions when not in MAIN mode
+- ~~Add 1 bit signifying if calibration data has happened right after MCU is powered up~~
+- ~~No transmissions when not in MAIN mode~~
 - LED blinking pattern notifying that calibration is not set
 - Go to sleep immediately after the transmission if waking up was initiated by timer (not interrupt)
