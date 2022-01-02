@@ -5,7 +5,9 @@
 #include <GyverPower.h>
 #include <EEPROM.h>
 
-#define DEBUG
+// #define DEBUG
+// #define RESET_EEPROM_CALIBRATION
+
 #ifdef DEBUG
 #define DEBUG_SERIAL
 #endif
@@ -15,7 +17,7 @@ const uint8_t PROTOCOL_VERSION = 1; // (0 .. 7)
 
 const uint8_t TX_REPEAT_MSG = 10;
 #define PACKET_1_SIZE 4
-#define PACKET_2_SIZE 6
+#define PACKET_2_SIZE 7
 
 //const int PIN_TX = 12; // hardcoded in tinyrf
 const uint8_t PIN_LED = 13;
@@ -54,9 +56,10 @@ const uint8_t     GOSLEEP_LED_LEN = 20;
 
 uint8_t mode = MODE_MAIN;
 uint8_t intervalDurationIdx = 2;
-uint8_t sensorThresholdDry = 50; // (0 .. 63)
-uint8_t sensorThresholdWet = 40; // (0 .. 63)
-uint8_t sensorLastMeasurement = 0; // (0 .. 63)
+uint8_t sensorThresholdDry = 200; // (0 .. 255) directly mapped from 0 .. 1023
+uint8_t sensorThresholdWet = 150; // (0 .. 255) directly mapped from 0 .. 1023
+volatile uint8_t sensorLastMeasurement = 0; // (0 .. 255) directly mapped from 0 .. 1023
+#define SENSOR_THRESHOLD_MARGIN 10 // in terms of range (0 .. 255)
 
 volatile bool isSleeping = false;
 volatile bool needToAutoLed = true; // if we need to blink when transmitting/sleeping (only happens after btn interrupt)
@@ -76,7 +79,7 @@ void setupTX() {
 }
 
 void makeMeasurement() {
-  sensorLastMeasurement = map(analogRead(PIN_SENSOR), 0, 1023, 0, 63);
+  sensorLastMeasurement = map(analogRead(PIN_SENSOR), 0, 1023, 0, 255);
 #ifdef DEBUG_SERIAL
   Serial.print(F("makeMeasurement(): "));
   Serial.println(sensorLastMeasurement);
@@ -133,7 +136,7 @@ void transmit(const uint8_t& len) {
 // voltage          3 bits  (0 .. 7)      0 - unknown
 // unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
 // timestamp        10 bits (0 .. 1023)   time since device started in units
-// sensor_val       6 bits  (0 .. 63)
+// sensor_val       6 bits  (0 .. 63)     measurement value, stretched between thresholds
 // |       b0             |  |           b1           | |     b2      | |      b3      |
 // x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
 // DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val
@@ -147,7 +150,10 @@ void transmitLastMeasurement() {
   b1 |= unit & 0b11; // add units
   uint8_t b2 = time >> 2 & 0xFF; // add big part of timestamp
   uint8_t b3 = (time & 0b11) << 6; // add little part of timestamp
-  b3 |= sensorLastMeasurement & 0b111111;
+
+  // stretch measurement between thresholds and map to 6 bits
+  uint8_t measVal = (uint16_t)(constrain(sensorLastMeasurement, sensorThresholdWet, sensorThresholdDry) - sensorThresholdWet) * 63 / (sensorThresholdDry - sensorThresholdWet);
+  b3 |= measVal & 0b111111;
 
   txBuffer[1] = b1;
   txBuffer[2] = b2;
@@ -162,14 +168,15 @@ void transmitLastMeasurement() {
 // timestamp        10 bits (0 .. 1023)   time since device started in units
 // V_min            3 bits  (0 .. 7)      0 - unknown; minimum voltage
 // V_max            3 bits  (0 .. 7)      0 - unknown; maximum voltage
-// Clbrtn__dry      6 bits  (0 .. 63)     calibration threshold for 'dry'
-// Clbrtn__wet      6 bits  (0 .. 63)     calibration threshold for 'wet'
+// Calibration_dry  8 bits  (0 .. 255)    calibration threshold for 'dry'
+// Calibration_wet  8 bits  (0 .. 255)    calibration threshold for 'wet'
+// Margin_          4 bits  (0 .. 15)     SENSOR_THRESHOLD_MARGIN value
 // Intrvl           3 bits  (0 .. 7)      index of interval for transmitting sensor measurements
-// NAS                                    Not Assigned
-// |       b0             | |           b1           | |     b2      | |      b3      | |     b4      | |       b5      |
-// x x x x x  x     x     x x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x   x
-// DEVICE_ID  prot_version  packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
-void transmitCalibration() {
+// F                1 bit   (0 .. 1)      First, if this package is sent as a part of the initialization
+// |       b0             | |           b1           | |     b2      | |      b3      | |     b4      | |       b5    | |      b6       |
+// x x x x x  x     x     x x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x x x x x x x x x  x
+// DEVICE_ID  prot_version  packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Calibration_dry Calibration_wet Margin_ Intrvl F
+void transmitCalibration(bool first) {
   uint8_t unit;
   uint16_t time;
   retrieveTimeSinceStarted(unit, time);
@@ -181,16 +188,17 @@ void transmitCalibration() {
   uint8_t b3 = (time & 0b11) << 6; // add little part of timestamp
   // b3 |= 0 << 3; // TODO: V_min unknown for now
   // b3 |= 0; // TODO: V_max unknown for now
-  uint8_t b4 = (sensorThresholdDry & 0b111111) << 2; // add calibration for 'dry'
-  b4 |= (sensorThresholdWet & 0b111111) >> 4;
-  uint8_t b5 = (sensorThresholdWet & 0b1111) << 4;
-  b5 |= (intervalDurationIdx & 0b111) << 1;
+  uint8_t b4 = sensorThresholdDry & 0xFF; // add calibration for 'dry'
+  uint8_t b5 = sensorThresholdWet & 0xFF;
+  uint8_t b6 = (SENSOR_THRESHOLD_MARGIN & 0b1111) << 4;
+  b6 |= ((uint8_t)first) & 1;
 
   txBuffer[1] = b1;
   txBuffer[2] = b2;
   txBuffer[3] = b3;
   txBuffer[4] = b4;
   txBuffer[5] = b5;
+  txBuffer[6] = b6;
   
   transmit(PACKET_2_SIZE);
 }
@@ -228,7 +236,7 @@ void handleWakeUp() {
 void goToSleep() {
   // send calibrations if smth has been changed
   if (needToSendCalibrations) {
-    transmitCalibration();
+    transmitCalibration(false);
     needToSendCalibrations = false;
   }
 
@@ -282,7 +290,7 @@ void loadFromEEPROM() {
   Serial.println(_wet);
 #endif
   // Validate sensor thresholds
-  if (_wet < _dry && _wet < 64 && _dry < 64) {
+  if (_wet + SENSOR_THRESHOLD_MARGIN < _dry - SENSOR_THRESHOLD_MARGIN && _wet < 256 && _dry < 256) {
     sensorThresholdDry = _dry;
     sensorThresholdWet = _wet;
   }
@@ -318,7 +326,7 @@ void loadFromEEPROM() {
 #endif
   }
   // Transmit all the calibrations after they are loaded
-  transmitCalibration();
+  transmitCalibration(true);
 }
 
 void blinkLed(const uint8_t &len, const uint16_t *intervals) {
@@ -354,7 +362,7 @@ void handleMenuCalibration() {
       blinkLed(btn.clicks * 2, MODE_INTERVAL_LED);
       makeMeasurement();
       if (btn.clicks == 2) {
-        sensorThresholdDry = sensorLastMeasurement;
+        sensorThresholdDry = constrain((int16_t)sensorLastMeasurement + SENSOR_THRESHOLD_MARGIN, 0, 255);
         EEPROM.write(EEPROM_IDX_THRESHOLD_DRY, sensorThresholdDry);
         needToSendCalibrations = true; // calibrations will be transmitted before going to sleep
 #ifdef DEBUG_SERIAL
@@ -362,7 +370,7 @@ void handleMenuCalibration() {
 #endif
       }
       else {
-        sensorThresholdWet = sensorLastMeasurement;
+        sensorThresholdWet = constrain((int16_t)sensorLastMeasurement - SENSOR_THRESHOLD_MARGIN, 0, 255);
         EEPROM.write(EEPROM_IDX_THRESHOLD_WET, sensorThresholdWet);
         needToSendCalibrations = true;
 #ifdef DEBUG_SERIAL
@@ -378,7 +386,7 @@ void handleMenuCalibration() {
 #endif
     } else if (btn.clicks == 1) {
       // Single click in calibration mode sends calibration data
-      transmitCalibration();
+      transmitCalibration(false);
     }
   }
 }
@@ -427,6 +435,11 @@ void setup() {
 #ifdef DEBUG_SERIAL
   Serial.begin(115200);
   Serial.println(F("Welcome to Remote Moisture Sensing deivce!"));
+#endif
+#ifdef RESET_EEPROM_CALIBRATION
+    EEPROM.write(EEPROM_IDX_THRESHOLD_DRY, 0);
+    EEPROM.write(EEPROM_IDX_THRESHOLD_WET, 0);
+    EEPROM.write(EEPROM_IDX_INTERVAL_DURATION_IDX, 0);
 #endif
 
   setupTX();

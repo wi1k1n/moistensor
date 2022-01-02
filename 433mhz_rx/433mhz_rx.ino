@@ -15,7 +15,7 @@ void setup() {
 }
 
 void loop() {
-  const uint8_t bufSize = 6;
+  const uint8_t bufSize = 7;
   byte buf[bufSize];
   uint8_t numLostMsgs = 0;
   uint8_t numRcvdBytes = 0;
@@ -46,9 +46,10 @@ void loop() {
 // voltage          3 bits  (0 .. 7)      0 - unknown
 // unit             2 bits  (0 .. 3)      0 - seconds, 1 - minutes, 2 - hours, 3 - days
 // timestamp        10 bits (0 .. 1023)   time since device started in units
+// sensor_val       6 bits  (0 .. 63)     measurement value, stretched between thresholds
 // |       b0             |  |           b1           | |     b2      | |      b3      |
 // x x x x x  x     x     x  x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x
-// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val 
+// DEVICE_ID  prot_version   packet_type   voltage unit timestamp_in_s/m/h/d  sensor_val
 //
 // packet_type == 2: share calibration data
 // voltage          3 bits  (0 .. 7)      0 - unknown
@@ -56,13 +57,14 @@ void loop() {
 // timestamp        10 bits (0 .. 1023)   time since device started in units
 // V_min            3 bits  (0 .. 7)      0 - unknown; minimum voltage
 // V_max            3 bits  (0 .. 7)      0 - unknown; maximum voltage
-// Clbrtn__dry      6 bits  (0 .. 63)     calibration threshold for 'dry'
-// Clbrtn__wet      6 bits  (0 .. 63)     calibration threshold for 'wet'
+// Calibration_dry  8 bits  (0 .. 255)    calibration threshold for 'dry'
+// Calibration_wet  8 bits  (0 .. 255)    calibration threshold for 'wet'
+// Margin_          4 bits  (0 .. 15)     SENSOR_THRESHOLD_MARGIN value
 // Intrvl           3 bits  (0 .. 7)      index of interval for transmitting sensor measurements
-// NAS                                    Not Assigned
-// |       b0             | |           b1           | |     b2      | |      b3      | |     b4      | |       b5       |
-// x x x x x  x     x     x x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x  x x
-// DEVICE_ID  prot_version  packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Clbrtn__dry Clbrtn__wet Intrvl NAS
+// F                1 bit   (0 .. 1)      First, if this package is sent as a part of the initialization
+// |       b0             | |           b1           | |     b2      | |      b3      | |     b4      | |       b5    | |      b6       |
+// x x x x x  x     x     x x    x    x   x  x  x x  x x x x x x x x x x x  x x x x x x x x x x x x x x x x x x x x x x x x x x x x x  x
+// DEVICE_ID  prot_version  packet_type   voltage unit timestamp_in_s/m/h/d V_min V_max Calibration_dry Calibration_wet Margin_ Intrvl F
 
 #ifdef DEBUG
     Serial.print(F("> "));
@@ -108,15 +110,15 @@ void loop() {
         Serial.print(F(" Timestamp: "));
         Serial.print(timeStamp);
         Serial.print(((const char*[]){"s", "m", "h", "d"})[unitTime]);
-        Serial.print(F(" Measurement: "));
+        Serial.print(F(" Measurement*: "));
         Serial.println(measurement);
         return;
       }
       else if (packetType == 2) { // calibration data
-        if (numRcvdBytes != 6) {
+        if (numRcvdBytes != 7) {
           Serial.print(F("[PRv1-2] Invalid packet: Received "));
           Serial.print(numRcvdBytes);
-          Serial.println(F(" bytes (expected 6)"));
+          Serial.println(F(" bytes (expected 7)"));
           return;
         }
         uint8_t voltage = b1 >> 2 & 0b111;
@@ -124,14 +126,17 @@ void loop() {
         uint8_t b2 = buf[2],
                 b3 = buf[3],
                 b4 = buf[4],
-                b5 = buf[5];
+                b5 = buf[5],
+                b6 = buf[6];
         uint16_t timeStamp = b2 << 2 | (b3 >> 6 & 0b11);
         uint8_t V_min = b3 >> 3 & 0b111;
         uint8_t V_max = b3 & 0b111;
-        uint8_t calibrationDry = (b4 >> 2) & 0b111111;
-        uint8_t calibrationWet = (b4 & 0b11) << 4 | (b5 >> 4);
-        uint8_t intervalIdx = (b5 >> 1) & 0b111;
+        uint8_t calibrationDry = b4;
+        uint8_t calibrationWet = b5;
+        uint8_t margin = b6 >> 4;
+        uint8_t intervalIdx = (b6 >> 1) & 0b111;
         const uint16_t MODE_INTERNAL_DURATIONS[] = {1, 15, 60, 240, 1440}; // in minutes
+        bool first = b6 & 1;
 
         Serial.print(F("[PRv1-2] Voltage: "));
         if (voltage) Serial.print(voltage);
@@ -147,12 +152,16 @@ void loop() {
         else Serial.print(F("unknown"));
         Serial.print(F(" Calibration_dry: "));
         Serial.print(calibrationDry);
+        Serial.print(F("=")); Serial.print(calibrationDry - margin); Serial.print(F("+")); Serial.print(margin);
         Serial.print(F(" Calibration_wet: "));
         Serial.print(calibrationWet);
+        Serial.print(F("=")); Serial.print(calibrationWet + margin); Serial.print(F("-")); Serial.print(margin);
         Serial.print(F(" [Idx] Interval: ["));
         Serial.print(intervalIdx);
         Serial.print(F("] "));
-        Serial.println(MODE_INTERNAL_DURATIONS[intervalIdx]);
+        Serial.print(MODE_INTERNAL_DURATIONS[intervalIdx]);
+        Serial.print(F(" First: "));
+        Serial.println(first ? F("true") : F("false"));
         return;
       }
       else {
