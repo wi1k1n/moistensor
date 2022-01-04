@@ -2,3 +2,5 @@
 .idea
 config.py
 test.txt
+data
+moistensorbot.pickle

@@ -18,7 +18,7 @@ while True:
     write2file = decoded_bytes.startswith('[PRv1-')
     print(('[logged]' if write2file else '') + decoded_bytes)
     if (write2file):
-        with open('test.txt', 'a') as file:
+        with open('data/test.old.txt', 'a') as file:
             file.write(decoded_bytes)
     # except:
     #     print("Keyboard Interrupt")

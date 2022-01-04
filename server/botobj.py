@@ -1,89 +1,127 @@
 import logging
 from typing import Dict
-from telegram import Update
+from telegram import Update, User
 from telegram.ext import (
     Updater,
+    Dispatcher,
     CommandHandler,
     MessageHandler,
     Filters,
     ConversationHandler,
-    CallbackContext
+    CallbackContext,
+    PicklePersistence
 )
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 class TelegramBot:
     def __init__(self, _token: str):
         self.TOKEN = _token
+        self.WAITING_FOR_PASSWORD,\
+            self.STREAMEVENTS,\
+            self.IGNORE = range(3)
 
-        # Enable logging
-        logging.basicConfig(
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
-        )
-        self.logger = logging.getLogger(__name__)
+        self.INITIAL_ATTEMPTS = 4
 
-        self.CHOOSING, self.TYPING_REPLY, self.TYPING_CHOICE = range(3)
+        self.updater: Updater = None
+        self.dispatcher: Dispatcher = None
 
-        self.reply_keyboard = [
-            ['Age', 'Favourite colour'],
-            ['Number of siblings', 'Something else...'],
-            ['Done'],
-        ]
+        self.authorizedUserIds = []
+        self.subscribedChatIds = []
+        self.ready = False
 
-    def startBot(self) -> None:
+    def startBot(self, blockThread = False) -> None:
         """Run the bot."""
+        # TODO: add persistence
+
         # Create the Updater and pass it your bot's token.
-        updater = Updater(self.TOKEN)
+        self.updater = Updater(self.TOKEN)
 
         # Get the dispatcher to register handlers
-        dispatcher = updater.dispatcher
+        self.dispatcher = self.updater.dispatcher
 
         # Add conversation handler with the states CHOOSING, TYPING_CHOICE and TYPING_REPLY
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', self.start)],
             states={
-                self.CHOOSING: [
-                    MessageHandler(
-                        Filters.regex('^(Age|Favourite colour|Number of siblings)$'), self.regular_choice
-                    ),
-                    MessageHandler(Filters.regex('^Something else...$'), self.custom_choice),
+                self.WAITING_FOR_PASSWORD: [
+                    MessageHandler(Filters.text, self.checkPassCode),
                 ],
-                self.TYPING_CHOICE: [
-                    MessageHandler(
-                        Filters.text & ~(Filters.command | Filters.regex('^Done$')), self.regular_choice
-                    )
+                self.STREAMEVENTS: [
+                    MessageHandler(Filters.text, self.streamEvents),
                 ],
-                self.TYPING_REPLY: [
-                    MessageHandler(
-                        Filters.text & ~(Filters.command | Filters.regex('^Done$')),
-                        self.received_information,
-                    )
-                ],
+                self.IGNORE: []
             },
-            fallbacks=[MessageHandler(Filters.regex('^Done$'), self.done)],
+            fallbacks=[],
         )
 
-        dispatcher.add_handler(conv_handler)
+        self.dispatcher.add_handler(conv_handler)
 
         # Start the Bot
-        updater.start_polling()
+        self.updater.start_polling()
 
-        # # Run the bot until you press Ctrl-C or the process receives SIGINT,
-        # # SIGTERM or SIGABRT. This should be used most of the time, since
-        # # start_polling() is non-blocking and will stop the bot gracefully.
-        # updater.idle()
+        # Run the bot until you press Ctrl-C or the process receives SIGINT,
+        # SIGTERM or SIGABRT. This should be used most of the time, since
+        # start_polling() is non-blocking and will stop the bot gracefully.
+        if blockThread:
+            self.updater.idle()
 
     def facts_to_str(self, user_data: Dict[str, str]) -> str:
         """Helper function for formatting the gathered user info."""
         facts = [f'{key} - {value}' for key, value in user_data.items()]
         return "\n".join(facts).join(['\n', '\n'])
 
-    def start(self, update: Update, context: CallbackContext) -> int:
-        """Start the conversation and ask user for input."""
-        update.message.reply_text(
-            "Hi! My name is Doctor Botter. I will hold a more complex conversation with you. "
-            "Why don't you tell me something about yourself?"
-        )
+    def generatePassCode(self, usr: User) -> str:
+        return 'TODO:' + str(usr.id)
 
-        return self.CHOOSING
+    def start(self, upd: Update, ctx: CallbackContext) -> int:
+        if upd.effective_user.is_bot:
+            return self.IGNORE
+        upd.message.reply_text(
+            "Welcome to Moistensor Bot. Please authorize yourself with a code from the console."
+        )
+        passCode = self.generatePassCode(upd.effective_user)
+        ctx.user_data['passCode'] = passCode
+        ctx.user_data['authAttempts'] = self.INITIAL_ATTEMPTS
+        ctx.user_data['banned'] = False
+        print('New user: [' + str(upd.effective_user.id) + '] ' + upd.effective_user.name + ' | Passcode: ' + passCode)
+        return self.WAITING_FOR_PASSWORD
+
+    def alarm(ctx: CallbackContext) -> None:
+        """Send the alarm message."""
+        ctx.bot.send_message(ctx.job.context, text='Beep!')
+
+    def checkPassCode(self, upd: Update, ctx: CallbackContext) -> int:
+        if upd.message.text != ctx.user_data['passCode']:
+            ctx.user_data['authAttempts'] -= 1
+            if ctx.user_data['authAttempts'] <= 0:
+                ctx.user_data['banned'] = True
+                upd.message.reply_text(
+                    'No more authorization attempts. You are banned. Contact administrator for further information'
+                )
+                return self.IGNORE
+            else:
+                upd.message.reply_text(
+                    'Wrong pass code. Try again (' + str(ctx.user_data['authAttempts']) + ' attempts left)'
+                )
+            return self.WAITING_FOR_PASSWORD
+        upd.message.reply_text(
+            'Successfully authorized! Listening for the events.'
+        )
+        self.authorizedUserIds.append(upd.effective_user.id)
+        self.subscribedChatIds.append(upd.message.chat_id)
+
+        return self.STREAMEVENTS
+
+    def streamEvents(self, upd: Update, ctx: CallbackContext) -> int:
+        upd.message.reply_text(
+            'Waiting for events to stream'
+        )
+        return self.STREAMEVENTS
 
     def regular_choice(self, update: Update, context: CallbackContext) -> int:
         """Ask the user for info about the selected predefined choice."""
@@ -131,4 +169,5 @@ class TelegramBot:
         return ConversationHandler.END
 
     def sendMessage(self, msg: str) -> None:
-        pass
+        for chatId in self.subscribedChatIds:
+            self.updater.bot.send_message(chatId, msg)
