@@ -4,3 +4,4 @@ config.py
 test.txt
 data
 moistensorbot.pickle
+__pycache__

@@ -5,7 +5,7 @@
 #include <GyverPower.h>
 #include <EEPROM.h>
 
-#define DEBUG
+// #define DEBUG
 // #define RESET_EEPROM_CALIBRATION
 
 #ifdef DEBUG
@@ -13,6 +13,8 @@
 #define SERIAL_MONITOR_WIDTH 120
 #endif
 
+
+// Protocol stuff
 const uint8_t DEVICE_ID = 9; // (0 .. 31) transmitted every time for receiver to distinguish between different devices
 const uint8_t PROTOCOL_VERSION = 1; // (0 .. 7)
 
@@ -20,17 +22,16 @@ const uint8_t TX_REPEAT_MSG = 10;
 #define PACKET_1_SIZE 5
 #define PACKET_2_SIZE 8
 
+
+// Pins stuff
 //const int PIN_TX = 12; // hardcoded in tinyrf
 const uint8_t PIN_LED = 13;
 const uint8_t PIN_BTN = 3; // should be an interrupt pin (D2/D3 for Uno/Nano/ProMini)
 const uint8_t BTN_INTERRUPT = 1; // 0 if D2, 1 if D3
 const uint8_t PIN_SENSOR = A2;
 
-EncButton<EB_TICK, PIN_BTN> btn;
-TimerLED timerLed(PIN_LED, true, false);
-TimerMs timerIdleToSleep(5000, 0, 1);
-TimerMs timerTransmit;
 
+// Menu stuff
 #define MODE_MAIN     0
 #define MODE_CALIB    1
 #define MODE_INTERVAL 2
@@ -49,16 +50,30 @@ const uint16_t*   MODE_CALIBRATION_LED = MODE_INTERVAL_LED;
 const uint16_t    GOSLEEP_LED[] = {20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20};
 const uint8_t     GOSLEEP_LED_LEN = 20;
 
+
+// Sensor stuff
+#define DEFAULT_THRESHOLD_DRY 800
+#define DEFAULT_THRESHOLD_WET 600
+#define DEFAULT_INTERVAL_IDX 2
+
+#define NUMBER_OF_MEASUREMENTS_TO_SUM 16
+#define DELAY_BETWEEN_SINGLE_MEASUREMENTS_MS 1
+
 #define EEPROM_IDX_THRESHOLD_DRY          5
 #define EEPROM_IDX_THRESHOLD_WET          7
 #define EEPROM_IDX_INTERVAL_DURATION_IDX  9
 
 
 
+EncButton<EB_TICK, PIN_BTN> btn;
+TimerLED timerLed(PIN_LED, true, false);
+TimerMs timerIdleToSleep(5000, 0, 1);
+TimerMs timerTransmit;
+
 uint8_t mode = MODE_MAIN;
-uint8_t intervalDurationIdx = 2;
-uint16_t sensorThresholdDry = 800; // (0 .. 1023) raw value
-uint16_t sensorThresholdWet = 600; // (0 .. 1023) raw value
+uint8_t intervalDurationIdx = DEFAULT_INTERVAL_IDX;
+uint16_t sensorThresholdDry = DEFAULT_THRESHOLD_DRY; // (0 .. 1023) raw value
+uint16_t sensorThresholdWet = DEFAULT_THRESHOLD_WET; // (0 .. 1023) raw value
 volatile uint16_t sensorLastMeasurement = 0; // (0 .. 1023) raw value
 
 volatile bool isSleeping = false;
@@ -80,7 +95,11 @@ void setupTX() {
 
 void makeMeasurement() {
   // sensorLastMeasurement = map(analogRead(PIN_SENSOR), 0, 1023, 0, 255);
-  sensorLastMeasurement = analogRead(PIN_SENSOR);
+  // sensorLastMeasurement = analogRead(PIN_SENSOR);
+  sensorLastMeasurement = 0;
+  for (uint8_t ind = 0; ind < NUMBER_OF_MEASUREMENTS_TO_SUM; ++ind)
+    sensorLastMeasurement = (sensorLastMeasurement * ind + analogRead(PIN_SENSOR)) / (ind + 1);
+
 #ifdef DEBUG_SERIAL
   Serial.print(F("makeMeasurement(): "));
   Serial.println(sensorLastMeasurement);
@@ -107,22 +126,6 @@ void retrieveTimeSinceStarted(uint8_t& _unit, uint16_t& _time) {
   }
   _time = 32768;
   return;
-
-  // uint32_t time = millis() / 1000 + (uint32_t)(millisRolloverCount * 4294967.296f); // in seconds
-  // const uint8_t devisors[] = {60, 60, 24}; // divisors to sequentially get minutes, hours and days
-  // uint8_t i = 0;
-  // do {
-  //   if (time < 1024) {
-  //     _unit = i;
-  //     _time = time;
-  //     return;
-  //   } else if (i == 3) { // if bigger than 1023 days, then clamp to 1024 days
-  //       _unit = 3;
-  //       _time = 1023;
-  //       return;
-  //   }
-  //   time /= devisors[i];
-  // } while (++i <= 3);
 }
 
 void transmit(const uint8_t& len) {

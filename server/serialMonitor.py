@@ -25,23 +25,48 @@ class DebugMonitor(DataObtainer):
             time.sleep(10)
 
 class SerialMonitor(DataObtainer):
-    def __init__(self, port: str = None, baudrate: int = 115200, timeout: int = 10):
+    def __init__(self):
         super().__init__()
-        self.port = port
+        self.port = None
+        self.baudRate = None
+        self.timeout = None
+
+    def setup(self, port: str = None, baudrate: int = 115200, timeout: int = 10) -> bool:
+        """ Takes control of the thread for setting up the """
+        self.port = None
         self.baudRate = baudrate
         self.timeout = timeout
 
-    def setup(self) -> None:
-        """ Takes control of the thread for setting up the """
         ports = listSerialPorts()
         if not len(ports):
             print('No Serial ports available')
             return False
+
+        def portSelected(p) -> bool:
+            print('Port ' + p + ' selected')
+            self.port = p
+            return True
+        def portNotAvailable() -> bool:
+            print('Port ' + self.port + ' is not available!')
+            return False
+
         if len(ports) == 1:
-            print('The only port available: ' + ports[0])
-            self.port = ports[0]
+            if self.port and ports[0].lower() != self.port.lower():  # the only available port mismatch requested port
+                return portNotAvailable()
+            if self.port:  # requested port matches the only available one
+                return portSelected(ports[0])
+            else:  # no requested port and only one available
+                print('Selected the only available port: ' + ports[0])
+                self.port = ports[0]
             return True
 
+        if self.port:  # port requested
+            reqAvail = [i for i, p in enumerate(ports) if p.lower() == self.port.lower()]
+            if not len(reqAvail):  # no port from list of available ports match the requested one
+                return portNotAvailable()
+            return portSelected(ports[reqAvail[0]])  # requested port has been found
+
+        # port is not requested
         print('The following ports are available:')
         for i, p in enumerate(ports):
             print('[' + str(i) + '] ' + p)
@@ -68,12 +93,12 @@ class SerialMonitor(DataObtainer):
         ser = None
         try:
             ser = serial.Serial(self.port, self.baudRate, timeout=self.timeout)
-            print(ser.name)
-            ser.flushInput()
         except:
             print('Serial could not been opened')
 
         if ser and ser.isOpen():
+            print(ser.name)
+            ser.flushInput()
             while True:
                 try:
                     bytes = ser.readall()
