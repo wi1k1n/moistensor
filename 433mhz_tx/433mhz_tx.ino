@@ -57,7 +57,7 @@ const uint8_t     GOSLEEP_LED_LEN = 20;
 #define DEFAULT_INTERVAL_IDX 2
 
 #define NUMBER_OF_MEASUREMENTS_TO_SUM 16
-#define DELAY_BETWEEN_SINGLE_MEASUREMENTS_MS 1
+#define DELAY_BETWEEN_SINGLE_MEASUREMENTS_MCRS 750
 
 #define EEPROM_IDX_THRESHOLD_DRY          5
 #define EEPROM_IDX_THRESHOLD_WET          7
@@ -96,9 +96,12 @@ void setupTX() {
 void makeMeasurement() {
   // sensorLastMeasurement = map(analogRead(PIN_SENSOR), 0, 1023, 0, 255);
   // sensorLastMeasurement = analogRead(PIN_SENSOR);
-  sensorLastMeasurement = 0;
-  for (uint8_t ind = 0; ind < NUMBER_OF_MEASUREMENTS_TO_SUM; ++ind)
-    sensorLastMeasurement = (sensorLastMeasurement * ind + analogRead(PIN_SENSOR)) / (ind + 1);
+  uint16_t measurementsSum = 0;
+  for (uint8_t ind = 0; ind < NUMBER_OF_MEASUREMENTS_TO_SUM; ++ind) {
+    measurementsSum += analogRead(PIN_SENSOR);
+    delayMicroseconds(DELAY_BETWEEN_SINGLE_MEASUREMENTS_MCRS);
+  }
+  sensorLastMeasurement = measurementsSum / (float)NUMBER_OF_MEASUREMENTS_TO_SUM;
 
 #ifdef DEBUG_SERIAL
   Serial.print(F("makeMeasurement(): "));

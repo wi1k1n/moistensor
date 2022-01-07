@@ -1,5 +1,5 @@
-import logging
-from typing import Dict
+import logging, hashlib, random, secrets
+from typing import Dict, List, Set
 from telegram import Update, User
 from telegram.ext import (
     Updater,
@@ -11,12 +11,21 @@ from telegram.ext import (
     CallbackContext,
     PicklePersistence
 )
+from remoteDevice import RemoteDevice
 
 # Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+class TGUser:
+    def __init__(self, uid):
+        self.uid = uid
+
+class SubscribedChat:
+    def __init__(self, chat_id):
+        self.chat_id = chat_id
 
 class TelegramBot:
     def __init__(self, _token: str):
@@ -30,22 +39,16 @@ class TelegramBot:
         self.updater: Updater = None
         self.dispatcher: Dispatcher = None
 
-        self.authorizedUserIds = []
-        self.subscribedChatIds = []
-        self.ready = False
+        self.authorizedUsers: Dict[int, TGUser] = dict()
+        self.subscribedChats: Dict[int, SubscribedChat] = dict()
+        self.devices: Dict[int, RemoteDevice] = dict()
 
     def startBot(self, blockThread = False) -> None:
         """Run the bot."""
         # TODO: add persistence
-
-        # Create the Updater and pass it your bot's token.
         self.updater = Updater(self.TOKEN)
-
-        # Get the dispatcher to register handlers
         self.dispatcher = self.updater.dispatcher
-
-        # Add conversation handler with the states CHOOSING, TYPING_CHOICE and TYPING_REPLY
-        conv_handler = ConversationHandler(
+        self.dispatcher.add_handler(ConversationHandler(
             entry_points=[CommandHandler('start', self.start)],
             states={
                 self.WAITING_FOR_PASSWORD: [
@@ -57,26 +60,20 @@ class TelegramBot:
                 self.IGNORE: []
             },
             fallbacks=[],
-        )
-
-        self.dispatcher.add_handler(conv_handler)
-
-        # Start the Bot
+        ))
         self.updater.start_polling()
-
-        # Run the bot until you press Ctrl-C or the process receives SIGINT,
-        # SIGTERM or SIGABRT. This should be used most of the time, since
-        # start_polling() is non-blocking and will stop the bot gracefully.
         if blockThread:
             self.updater.idle()
 
-    def facts_to_str(self, user_data: Dict[str, str]) -> str:
-        """Helper function for formatting the gathered user info."""
-        facts = [f'{key} - {value}' for key, value in user_data.items()]
-        return "\n".join(facts).join(['\n', '\n'])
+    def foreground(self):
+        self.updater.idle()
+
+    def stopBot(self):
+        self.updater.stop()
 
     def generatePassCode(self, usr: User) -> str:
-        return 'TODO:' + str(usr.id)
+        dg = hashlib.sha224(secrets.token_bytes(8) + str(usr.id).encode('utf-8')).digest()
+        return str(int.from_bytes(random.sample(dg, 4), 'big'))
 
     def start(self, upd: Update, ctx: CallbackContext) -> int:
         if upd.effective_user.is_bot:
@@ -112,8 +109,8 @@ class TelegramBot:
         upd.message.reply_text(
             'Successfully authorized! Listening for the events.'
         )
-        self.authorizedUserIds.append(upd.effective_user.id)
-        self.subscribedChatIds.append(upd.message.chat_id)
+        self.authorizedUsers[upd.effective_user.id] = TGUser(upd.effective_user.id)
+        self.subscribedChats[upd.message.chat_id] = SubscribedChat(upd.message.chat_id)
 
         return self.STREAMEVENTS
 
@@ -123,51 +120,23 @@ class TelegramBot:
         )
         return self.STREAMEVENTS
 
-    def regular_choice(self, update: Update, context: CallbackContext) -> int:
-        """Ask the user for info about the selected predefined choice."""
-        text = update.message.text
-        context.user_data['choice'] = text
-        update.message.reply_text(f'Your {text.lower()}? Yes, I would love to hear about that!')
-
-        return self.TYPING_REPLY
-
-    def custom_choice(self, update: Update, context: CallbackContext) -> int:
-        """Ask the user for a description of a custom category."""
-        update.message.reply_text(
-            'Alright, please send me the category first, for example "Most impressive skill"'
-        )
-
-        return self.TYPING_CHOICE
-
-    def received_information(self, update: Update, context: CallbackContext) -> int:
-        """Store info provided by user and ask for the next category."""
-        user_data = context.user_data
-        text = update.message.text
-        category = user_data['choice']
-        user_data[category] = text
-        del user_data['choice']
-
-        update.message.reply_text(
-            "Neat! Just so you know, this is what you already told me:"
-            f"{self.facts_to_str(user_data)} You can tell me more, or change your opinion"
-            " on something."
-        )
-
-        return self.CHOOSING
-
-    def done(self, update: Update, context: CallbackContext) -> int:
-        """Display the gathered info and end the conversation."""
-        user_data = context.user_data
-        if 'choice' in user_data:
-            del user_data['choice']
-
-        update.message.reply_text(
-            f"I learned these facts about you: {self.facts_to_str(user_data)}Until next time!"
-        )
-
-        user_data.clear()
-        return ConversationHandler.END
-
     def sendMessage(self, msg: str) -> None:
-        for chatId in self.subscribedChatIds:
-            self.updater.bot.send_message(chatId, msg)
+        for chat_id in self.subscribedChats:
+            self.updater.bot.send_message(chat_id, msg)
+
+    def handleSerialUpdate(self, msg: dict) -> None:
+        if 'error' in msg:
+            self.sendMessage(str(msg))
+            return
+
+        deviceID: int = msg['device']
+        if not (deviceID in self.devices):
+            self.devices[deviceID] = RemoteDevice(deviceID)
+        body = msg['body']
+        if msg['packetType'] == 1:  # measurement transmission
+            self.devices[deviceID].updateMeasurement(body['voltage'], body['timeSpan'], body['measurement'])
+        elif msg['packetType'] == 2:  # update calibrations
+            self.devices[deviceID].updateCalibrations(body['voltage'], body['timeSpan'], body['voltageMin'],
+                                                      body['voltageMax'], body['calibrDry'], body['calibrWet'],
+                                                      body['intervalIdx'], body['interval'])
+        self.sendMessage(str(msg))

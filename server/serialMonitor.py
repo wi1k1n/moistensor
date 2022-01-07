@@ -21,7 +21,7 @@ class DebugMonitor(DataObtainer):
 
         startTime = time.time()
         while True:
-            callback("{0} passed!".format(time.time() - startTime))
+            callback("{0} passed!\n".format(time.time() - startTime))
             time.sleep(10)
 
 class SerialMonitor(DataObtainer):
@@ -100,13 +100,14 @@ class SerialMonitor(DataObtainer):
             print(ser.name)
             ser.flushInput()
             while True:
-                try:
-                    bytes = ser.readall()
-                    bytesDecoded = bytes.decode('utf-8')
-                    if not bytesDecoded:
+                # try:
+                    msg = ser.readall().decode('utf-8')
+                    if not msg:
                         continue
-                    print('Received: ' + bytesDecoded)
+                    # print('Received: ' + msg)
                     if callback:
-                        callback(bytesDecoded)
-                except:
-                    print('Error while reading Serial port')
+                        callback(msg)
+                # except KeyboardInterrupt:
+                #     break
+                # except:
+                #     print('Error while reading Serial port')

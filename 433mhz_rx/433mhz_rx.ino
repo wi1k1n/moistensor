@@ -1,7 +1,9 @@
 #include "src/TinyRF/TinyRF_RX.h" // add ../TinyRF to the list of include paths for this to work
 
+// #define DEBUG
+
+
 #define SERIAL
-#define DEBUG
 
 int     rxPin      = 2;         // The number of signal from the Rx
 int     ledPin     = 13;        // The number of the onboard LED pin
@@ -93,19 +95,19 @@ void loop() {
     uint8_t deviceID = b0 >> 3;
     uint8_t protocolVersion = b0 & 0b111;
 
-    Serial.print(F("DeviceID: "));
+    Serial.print(F("[D"));
     Serial.print((int)deviceID);
-    Serial.print(F("\tProtocol_version: "));
-    Serial.println((int)protocolVersion);
+    Serial.print(F("PRv"));
+    Serial.print((int)protocolVersion);
+    Serial.print(F("-"));
 
     uint8_t b1 = buf[1];
     if (protocolVersion == 1) {
       uint8_t packetType = b1 >> 5;
       if (packetType == PRV1_PTYPEMT) { // sensor measurement transmission
         if (numRcvdBytes != PRV1_PTYPEMT_SIZE) {
-          Serial.print(F("[PRv1-"));
           Serial.print(PRV1_PTYPEMT);
-          Serial.print(F("] Invalid packet: Received "));
+          Serial.print(F("e] Invalid packet: Received "));
           Serial.print(numRcvdBytes);
           Serial.print(F(" bytes (expected "));
           Serial.print(PRV1_PTYPEMT_SIZE);
@@ -120,23 +122,21 @@ void loop() {
         uint16_t timeStamp = (b1 & 1) << 14 | b2 << 6 | (b3 >> 2 & 0b111111);
         uint16_t measurement = (b3 & 0b11) << 8 | b4;
 
-        Serial.print(F("[PRv1-"));
         Serial.print(PRV1_PTYPEMT);
-        Serial.print(F("] Voltage: "));
+        Serial.print(F("] v"));
         if (voltage) Serial.print(voltage);
-        else Serial.print(F("unknown"));
-        Serial.print(F(" Timestamp: "));
+        else Serial.print(F("?"));
+        Serial.print(F(" t"));
         Serial.print(timeStamp);
         Serial.print(unitTime ? F("h") : F("m"));
-        Serial.print(F(" Measurement*: "));
+        Serial.print(F(" m"));
         Serial.println(measurement);
         return;
       }
       else if (packetType == PRV1_PTYPECLBR) { // calibration data
         if (numRcvdBytes != PRV1_PTYPECLBR_SIZE) {
-          Serial.print(F("[PRv1-"));
           Serial.print(PRV1_PTYPECLBR);
-          Serial.print(F("] Invalid packet: Received "));
+          Serial.print(F("e] Invalid packet: Received "));
           Serial.print(numRcvdBytes);
           Serial.print(F(" bytes (expected "));
           Serial.print(PRV1_PTYPECLBR_SIZE);
@@ -160,30 +160,29 @@ void loop() {
         const uint16_t MODE_INTERNAL_DURATIONS[] = {1, 15, 60, 240, 1440}; // in minutes
         bool first = b7 >> 4 & 1;
 
-        Serial.print(F("[PRv1-"));
         Serial.print(PRV1_PTYPECLBR);
-        Serial.print(F("] Voltage: "));
+        Serial.print(F("] v"));
         if (voltage) Serial.print(voltage);
-        else Serial.print(F("unknown"));
-        Serial.print(F(" Timestamp: "));
+        else Serial.print(F("?"));
+        Serial.print(F(" t"));
         Serial.print(timeStamp);
         Serial.print(unitTime ? F("h") : F("m"));
-        Serial.print(F(" V_min: "));
+        Serial.print(F(" vn"));
         if (V_min) Serial.print(V_min);
-        else Serial.print(F("unknown"));
-        Serial.print(F(" V_max: "));
+        else Serial.print(F("?"));
+        Serial.print(F(" vx"));
         if (V_max) Serial.print(V_max);
-        else Serial.print(F("unknown"));
-        Serial.print(F(" Calibration_dry: "));
+        else Serial.print(F("?"));
+        Serial.print(F(" cd"));
         Serial.print(calibrationDry);
-        Serial.print(F(" Calibration_wet: "));
+        Serial.print(F(" cw"));
         Serial.print(calibrationWet);
-        Serial.print(F(" [Idx] Interval: ["));
+        Serial.print(F(" idx"));
         Serial.print(intervalIdx);
-        Serial.print(F("] "));
+        Serial.print(F(" int"));
         Serial.print(MODE_INTERNAL_DURATIONS[intervalIdx]);
-        Serial.print(F(" First: "));
-        Serial.println(first ? F("true") : F("false"));
+        Serial.print(F(" f"));
+        Serial.println(first ? 1 : 0);
         return;
       }
       else {
