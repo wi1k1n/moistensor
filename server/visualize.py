@@ -2,6 +2,15 @@ import re, numpy as np
 import matplotlib, matplotlib.pyplot as plt
 matplotlib.use('Qt5Agg')
 
+def parseLogFile(path: str) -> set:
+    data = set()
+
+    reTimeStamp = re.compile('\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.')
+    rePreambule = re.compile('\[D\d{1,3}PRv\d-\d\]')
+    with open(path) as file:
+        line = file.readline(256)
+    pass
+
 FILEPATH = 'data/test.txt'
 
 with open(FILEPATH) as file:

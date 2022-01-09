@@ -9,6 +9,7 @@ fLogger: FileLogger = None
 def handleSerialInput(msg: str):
     if fLogger:
         fLogger.log(msg)
+
     print(msg)
 
     if bot:
@@ -45,6 +46,7 @@ def handleSerialInput(msg: str):
         else:
             print('[ERROR Invalid Entry]: ' + msg)
             msgDict = {'error': msg}
+
         bot.handleSerialUpdate(msgDict)
 
 @click.command()

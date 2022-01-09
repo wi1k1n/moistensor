@@ -1,6 +1,7 @@
-import logging, hashlib, random, secrets
+import logging, hashlib, random, secrets, threading
+import time
 from typing import Dict, List, Set
-from telegram import Update, User
+from telegram import Update, User, Message
 from telegram.ext import (
     Updater,
     Dispatcher,
@@ -9,7 +10,7 @@ from telegram.ext import (
     Filters,
     ConversationHandler,
     CallbackContext,
-    PicklePersistence
+    PicklePersistence,
 )
 from remoteDevice import RemoteDevice
 
@@ -34,7 +35,9 @@ class TelegramBot:
             self.STREAMEVENTS,\
             self.IGNORE = range(3)
 
-        self.INITIAL_ATTEMPTS = 4
+        self.AUTH_INITIAL_ATTEMPTS = 4
+        self.SEND_MESSAGE_ATTEMPTS = 5
+        self.SEND_MESSAGE_REATTEMT_DELAY = 1  # in seconds
 
         self.updater: Updater = None
         self.dispatcher: Dispatcher = None
@@ -83,7 +86,7 @@ class TelegramBot:
         )
         passCode = self.generatePassCode(upd.effective_user)
         ctx.user_data['passCode'] = passCode
-        ctx.user_data['authAttempts'] = self.INITIAL_ATTEMPTS
+        ctx.user_data['authAttempts'] = self.AUTH_INITIAL_ATTEMPTS
         ctx.user_data['banned'] = False
         print('New user: [' + str(upd.effective_user.id) + '] ' + upd.effective_user.name + ' | Passcode: ' + passCode)
         return self.WAITING_FOR_PASSWORD
@@ -120,13 +123,30 @@ class TelegramBot:
         )
         return self.STREAMEVENTS
 
-    def sendMessage(self, msg: str) -> None:
+    def broadcastMessageToSubscribers(self, msg: str) -> None:
+        assert len(self.subscribedChats) < 1e3, 'Too many subscribers, cannot run multithreaded message sending. Contact developers!'
+        def sendMessage(chatId: int, msg: str) -> bool:
+            for i in range(self.SEND_MESSAGE_ATTEMPTS):
+                try:
+                    m: Message = self.updater.bot.send_message(chat_id, msg)
+                    return True if m else False
+                except Exception as e:
+                    print('Exception raised when sending to chat_id={0} attemp#{2}:\n\t>>{1}'.format(chatId, str(e), i))
+                    time.sleep(self.SEND_MESSAGE_REATTEMT_DELAY)
+            return False
+
+        threads = []
         for chat_id in self.subscribedChats:
-            self.updater.bot.send_message(chat_id, msg)
+            thr = threading.Thread(target=sendMessage, args=(chat_id, msg))
+            threads.append(thr)
+            thr.start()
+
+        for thr in threads:
+            thr.join()
 
     def handleSerialUpdate(self, msg: dict) -> None:
         if 'error' in msg:
-            self.sendMessage(str(msg))
+            self.broadcastMessageToSubscribers(str(msg))
             return
 
         deviceID: int = msg['device']
@@ -139,4 +159,4 @@ class TelegramBot:
             self.devices[deviceID].updateCalibrations(body['voltage'], body['timeSpan'], body['voltageMin'],
                                                       body['voltageMax'], body['calibrDry'], body['calibrWet'],
                                                       body['intervalIdx'], body['interval'])
-        self.sendMessage(str(msg))
+        self.broadcastMessageToSubscribers(str(msg))
