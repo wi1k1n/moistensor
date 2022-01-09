@@ -1,45 +1,79 @@
-import re, numpy as np
+import re, numpy as np, datetime as dt, io
 import matplotlib, matplotlib.pyplot as plt
+from matplotlib.dates import DateFormatter
+from protocolHandler import parseMessage
 matplotlib.use('Qt5Agg')
 
-def parseLogFile(path: str) -> set:
-    data = set()
+def parseLogFile(path: str, devices: list = None) -> set:
+    data = dict()
 
-    reTimeStamp = re.compile('\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.')
-    rePreambule = re.compile('\[D\d{1,3}PRv\d-\d\]')
+    reTimeStamp = re.compile('^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{1,6}\t')
     with open(path) as file:
-        line = file.readline(256)
-    pass
+        for line in file:
+            curTimeStamp = reTimeStamp.search(line)
+            if curTimeStamp:
+                line = line[len(curTimeStamp.group()):]
+                curTimeStamp = dt.datetime.strptime(curTimeStamp.group().strip(), '%Y-%m-%d %H:%M:%S.%f')
+            else:
+                curTimeStamp = None
+            packet = parseMessage(line)
+            if not packet or 'error' in packet:
+                continue
+            try:
+                device = packet['device']
+                if devices and not (device in devices):
+                    continue
+                if not (device in data):
+                    data[device] = []
+                entry = {
+                    'timestamp': curTimeStamp,
+                    'packetType': packet['packetType'],
+                    **packet['body']
+                }
+                data[device].append(entry)
+            except:
+                continue
+    return data if len(data) else None
 
 FILEPATH = 'data/test.txt'
 
-with open(FILEPATH) as file:
-    rawLines = file.readlines()
+data = parseLogFile(FILEPATH)
+if not len(data):
+    print('No devices loaded! Check your data file!')
 
-# Find last calibration entry
-reCDry = re.compile('Calibration_dry: \d+')
-reCWet = re.compile('Calibration_wet: \d+')
-calibIndices = [(i, (re.search('\d+', reCDry.search(l).group()).group(), re.search('\d+', reCWet.search(l).group()).group()))
-                for i, l in enumerate(rawLines) if re.search('[PRv1-2]', l) and reCDry.search(l) and reCWet.search(l)]
-
-startInd = 0  # Index of last calibration line
-if len(calibIndices):
-    calibIndices.reverse()
-    lastCalib = calibIndices[0]
-    for clind in calibIndices:
-        if clind[1] != lastCalib[1]:
+# Sort out all entries with the outdated calibration
+for i, (dev, val) in enumerate(data.items()):
+    data[dev] = sorted(val, key=lambda d: d['timestamp'])
+    calibs = [(v, i) for i, v in enumerate(val) if v['packetType'] == 2]
+    if not len(calibs):
+        print('No calibration entries for device#{0}'.format(dev))
+        data[dev] = ([e for e in data[dev] if e['packetType'] == 1], None)
+        continue
+    calibs.reverse()
+    lCalibIdx = 0  # last calibration index
+    for j, c in enumerate(calibs):
+        if c[0]['calibrDry'] != calibs[lCalibIdx][0]['calibrDry'] or c[0]['calibrWet'] != calibs[lCalibIdx][0]['calibrWet']:
             break
-        startInd = clind[0]
-else:
-    print('WARNING: no calibration lines!!!')
+        lCalibIdx = j
+    calibration = calibs[lCalibIdx][0]
+    startIndex = calibs[lCalibIdx][-1]
+    data[dev] = ([e for k, e in enumerate(data[dev]) if k > startIndex and e['packetType'] == 1], calibration)
 
-# Get and process valid lines
-lines = [l for l in rawLines[startInd:] if re.search('\[PRv1-1\]', l)]
-tokens = [[i, re.search('Timestamp: \d+(m|h)', l).group()[11:], int(re.search('Measurement\*: \d+', l).group()[14:])] for i, l in enumerate(lines)]
-mlts = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
-# l = np.array([[i, int(dur[:-1]) * mlts[dur[-1]], int(v)] for i, (dur, v) in enumerate(list(map(tuple, [t[37:].split(' Measurement*: ') for t in contentList])))])
+for (dev, (l, calibr)) in data.items():
+    x = [e['timestamp'] for e in l]
+    y = [e['measurement'] for e in l]
+    fig, ax = plt.subplots()
+    ax.plot(x, y)
 
-x = np.array(tokens)[:, 0]
-y = np.array(tokens)[:, 2]
-plt.plot(x, y)
-plt.show()
+    myFmt = DateFormatter("%m-%d %H:%M")
+    ax.xaxis.set_major_formatter(myFmt)
+    fig.autofmt_xdate()
+
+    plt.savefig('t.png')
+    # plt.show()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+
+    # print(len(buf))

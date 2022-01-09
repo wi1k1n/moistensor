@@ -36,8 +36,8 @@ class TelegramBot:
             self.IGNORE = range(3)
 
         self.AUTH_INITIAL_ATTEMPTS = 4
-        self.SEND_MESSAGE_ATTEMPTS = 5
-        self.SEND_MESSAGE_REATTEMT_DELAY = 1  # in seconds
+        self.SEND_MESSAGE_ATTEMPTS = 3
+        self.SEND_MESSAGE_REATTEMT_DELAY = 0.5  # in seconds
 
         self.updater: Updater = None
         self.dispatcher: Dispatcher = None
@@ -145,6 +145,8 @@ class TelegramBot:
             thr.join()
 
     def handleSerialUpdate(self, msg: dict) -> None:
+        if not msg:
+            return
         if 'error' in msg:
             self.broadcastMessageToSubscribers(str(msg))
             return

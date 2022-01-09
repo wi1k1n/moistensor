@@ -7,7 +7,7 @@ class DataObtainer:
     def __init__(self):
         pass
 
-    def setup(self) -> None:
+    def setup(self, *args, **kwargs) -> None:
         pass
 
     def listen(self, callback: Callable[[str], None], blockthread: bool = False) -> None:
@@ -19,10 +19,12 @@ class DebugMonitor(DataObtainer):
         if not blockthread:
             raise NotImplemented('Non-blocking behavior is not implemented yet')
 
+        callback('[D9PRv1-2] v? t0m vn? vx? cd367 cw232 idx0 int1 f1')
+        time.sleep(5)
         startTime = time.time()
         while True:
-            callback("{0} passed!\n".format(time.time() - startTime))
-            time.sleep(10)
+            callback('[D9PRv1-1] v? t{0}m m370'.format(int((time.time() - startTime) / 60)))
+            time.sleep(5)
 
 class SerialMonitor(DataObtainer):
     def __init__(self):
