@@ -1,14 +1,17 @@
 from botobj import TelegramBot
 from serialMonitor import SerialMonitor, DebugMonitor
 from fileLogger import FileLogger
-from protocolHandler import parseMessage
+from deviceManager import DeviceManager
 import click, re
 
-bot: TelegramBot = None
-fLogger: FileLogger = None
+bot: TelegramBot | None = None
+fLogger: FileLogger | None = None
+deviceManager: DeviceManager | None = None
 
 def handleSerialInput(msg: str):
-    global bot, fLogger
+    global bot, fLogger, deviceManager
+
+    packet = deviceManager.handleMessageReceived(msg)
 
     if fLogger:
         fLogger.log(msg)
@@ -16,23 +19,25 @@ def handleSerialInput(msg: str):
     print(msg)
 
     if bot:
-        packet = parseMessage(msg)
-        bot.handleSerialUpdate(packet)
+        bot.handlePacketReceived(packet)
 
 @click.command()
 @click.option('-t', '--telegram-token', help='telegram bot token')
 @click.option('-p', '--com-port', help='name of the serial port to start listening to; auto - to autodetect')
 @click.option('-o', '--out-file', help='file for logging serial port')
 def main(telegram_token, com_port, out_file):
-    global bot, fLogger
+    global bot, fLogger, deviceManager
+
+    deviceManager = DeviceManager()
+
     # Initialize Telegram bot
     if telegram_token:
-        bot = TelegramBot(telegram_token)
+        bot = TelegramBot(telegram_token, deviceManager)
         bot.startBot()
     else:
         print('No telegram bot token provided! Bot has not been started!')
 
-    # Initialize monitor
+    # Initialize data obtainer
     data = DebugMonitor()
     # data: SerialMonitor = SerialMonitor()
     if com_port:

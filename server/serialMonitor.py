@@ -1,9 +1,11 @@
 import serial, time
 from collections.abc import Callable
 from util import listSerialPorts
+from deviceManager import DeviceManager
 
 
 class DataObtainer:
+    """ Base class for receiving data from remote devices """
     def __init__(self):
         pass
 
@@ -113,3 +115,8 @@ class SerialMonitor(DataObtainer):
                 #     break
                 # except:
                 #     print('Error while reading Serial port')
+
+
+class HomeAssistantObtainer(DataObtainer):
+    def __int__(self):
+        raise NotImplemented()

@@ -12,7 +12,8 @@ from telegram.ext import (
     CallbackContext,
     PicklePersistence,
 )
-from remoteDevice import RemoteDevice
+from remoteDevice import RemotePacket
+from deviceManager import DeviceManager
 
 # Enable logging
 logging.basicConfig(
@@ -31,10 +32,12 @@ class SubscribedChat:
         self.chat_id: int = chat_id
 
 class TelegramBot:
-    def __init__(self, _token: str):
+    def __init__(self, _token: str, deviceManager: DeviceManager | None):
         self.TOKEN: str = _token
+        self.deviceManager = deviceManager
+
         self.WAITING_FOR_PASSWORD,\
-            self.STREAMEVENTS,\
+            self.IN_MAIN_STATE,\
             self.IGNORE = range(3)
 
         self.AUTH_INITIAL_ATTEMPTS = 4
@@ -46,7 +49,6 @@ class TelegramBot:
 
         self.authorizedUsers: Dict[int, TGUser] = dict()
         self.subscribedChats: Dict[int, SubscribedChat] = dict()
-        self.devices: Dict[int, RemoteDevice] = dict()
 
     def startBot(self, blockThread = False) -> None:
         """Run the bot."""
@@ -60,7 +62,10 @@ class TelegramBot:
                     CommandHandler('start', self.start),
                     MessageHandler(Filters.text, self.checkPassCode),
                 ],
-                self.STREAMEVENTS: [
+                self.IN_MAIN_STATE: [
+                    CommandHandler('devices', self.showDevices),
+                    CommandHandler('visualize', self.visualizeDevice),
+                    CommandHandler('monitor', self.monitorDevice),
                     MessageHandler(Filters.text, self.streamEvents),
                 ],
                 self.IGNORE: []
@@ -135,13 +140,20 @@ class TelegramBot:
         self.authorizedUsers[upd.effective_user.id] = TGUser(upd.effective_user.id, upd.effective_chat.id, admin)
         self.subscribedChats[upd.message.chat_id] = SubscribedChat(upd.message.chat_id)  # TODO: remove this as it needs to be handled smarter through user interaction
 
-        return self.STREAMEVENTS
+        return self.IN_MAIN_STATE
 
     def streamEvents(self, upd: Update, ctx: CallbackContext) -> int:
         upd.message.reply_text(
             'Waiting for events to stream'
         )
-        return self.STREAMEVENTS
+        return self.IN_MAIN_STATE
+
+    def showDevices(self, upd: Update, ctx: CallbackContext) -> int:
+        pass
+    def visualizeDevice(self, upd: Update, ctx: CallbackContext) -> int:
+        pass
+    def monitorDevice(self, upd: Update, ctx: CallbackContext) -> int:
+        pass
 
     def broadcastMessageToChats(self, chatIds: List[int], msg: str) -> bool:
         assert len(chatIds) < 1e3, 'Too large user list, cannot run multithreaded message sending. Contact developers!'
@@ -167,21 +179,5 @@ class TelegramBot:
     def broadcastMessageToSubscribers(self, msg: str) -> None:
         self.broadcastMessageToChats(list(self.subscribedChats.keys()), msg)
 
-    def handleSerialUpdate(self, msg: dict) -> None:
-        if not msg:
-            return
-        if 'error' in msg:
-            self.broadcastMessageToSubscribers(str(msg))
-            return
-
-        deviceID: int = msg['device']
-        if not (deviceID in self.devices):
-            self.devices[deviceID] = RemoteDevice(deviceID)
-        body = msg['body']
-        if msg['packetType'] == 1:  # measurement transmission
-            self.devices[deviceID].updateMeasurement(body['voltage'], body['timeSpan'], body['measurement'])
-        elif msg['packetType'] == 2:  # update calibrations
-            self.devices[deviceID].updateCalibrations(body['voltage'], body['timeSpan'], body['voltageMin'],
-                                                      body['voltageMax'], body['calibrDry'], body['calibrWet'],
-                                                      body['intervalIdx'], body['interval'])
-        self.broadcastMessageToSubscribers(str(msg))
+    def handlePacketReceived(self, packet: RemotePacket):
+        self.broadcastMessageToSubscribers(str(packet))

@@ -69,9 +69,10 @@ for (dev, (l, calibr)) in data.items():
     ax.xaxis.set_major_formatter(myFmt)
     fig.autofmt_xdate()
 
-    plt.savefig('t.png')
-    # plt.show()
+    plt.show()
+    continue
 
+    plt.savefig('t.png')
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
