@@ -1,6 +1,8 @@
 import logging, hashlib, random, secrets, threading
-import time
+import time, datetime as dt
 from typing import Dict, List, Set
+
+import telegram.constants
 from telegram import Update, User, Message
 from telegram.ext import (
     Updater,
@@ -12,8 +14,15 @@ from telegram.ext import (
     CallbackContext,
     PicklePersistence,
 )
-from remoteDevice import RemotePacket
+from remoteDevice import RemotePacket, RemoteDevice
 from deviceManager import DeviceManager
+
+try:
+    from config import *
+except:
+    pass
+finally:
+    DEBUG = DEBUG if 'DEBUG' in globals() else False
 
 # Enable logging
 logging.basicConfig(
@@ -30,11 +39,18 @@ class TGUser:
 class SubscribedChat:
     def __init__(self, chat_id: int):
         self.chat_id: int = chat_id
+        self.deviceList: List[RemoteDevice] = []
+
+    def appendDevice(self, device: RemoteDevice | int):
+        self.deviceList.append(RemoteDevice(device) if type(device) == int else device)
+
+    def removeDevice(self, device: RemoteDevice | int):
+        self.deviceList.remove(device)
 
 class TelegramBot:
     def __init__(self, _token: str, deviceManager: DeviceManager | None):
         self.TOKEN: str = _token
-        self.deviceManager = deviceManager
+        self.deviceManager: DeviceManager = deviceManager
 
         self.WAITING_FOR_PASSWORD,\
             self.IN_MAIN_STATE,\
@@ -64,9 +80,9 @@ class TelegramBot:
                 ],
                 self.IN_MAIN_STATE: [
                     CommandHandler('devices', self.showDevices),
-                    CommandHandler('visualize', self.visualizeDevice),
-                    CommandHandler('monitor', self.monitorDevice),
-                    MessageHandler(Filters.text, self.streamEvents),
+                    CommandHandler('visualize', self.visualizeDevice, pass_args=True),
+                    CommandHandler('monitor', self.monitorDevice, pass_args=True),
+                    MessageHandler(Filters.text, self.mainMenuSink),
                 ],
                 self.IGNORE: []
             },
@@ -89,9 +105,14 @@ class TelegramBot:
             return self.IGNORE
         if upd.effective_user.id in self.authorizedUsers:
             upd.message.reply_text('You are already authorized. Try /help command.')
-            return
+            return self.IN_MAIN_STATE
         if upd.effective_chat.type != 'private':
-            return
+            return  # TODO: handle group chats properly
+        if DEBUG:
+            upd.message.reply_text('!!!DEBUG MODE ON!!! No authentication required!')
+            self.authorizedUsers[upd.effective_user.id] = TGUser(upd.effective_user.id, upd.effective_chat.id, True)
+            self.subscribedChats[upd.message.chat_id] = SubscribedChat(upd.message.chat_id)
+            return self.IN_MAIN_STATE
 
         upd.message.reply_text(
             "Welcome to Moistensor Bot. Please authorize yourself as administrator with a code from the console. "
@@ -142,18 +163,49 @@ class TelegramBot:
 
         return self.IN_MAIN_STATE
 
-    def streamEvents(self, upd: Update, ctx: CallbackContext) -> int:
+    def mainMenuSink(self, upd: Update, ctx: CallbackContext) -> int:
         upd.message.reply_text(
-            'Waiting for events to stream'
+            'Use /help to check valid commands'
         )
         return self.IN_MAIN_STATE
 
     def showDevices(self, upd: Update, ctx: CallbackContext) -> int:
-        pass
+        repl = 'List of devices:\n'
+        for (d, m, c) in self.deviceManager.devicesOverview():
+            if m and c:
+                repl += 'Device#{0}: <b>{2}</b> ({5}m ago) [{1} .. {3}] every {4}m ({6}m up)\n'\
+                    .format(d.id, c.calibrationWet, m.measurement, c.calibrationDry, c.interval, round((dt.datetime.now() - m.timestamp).total_seconds() / 60),
+                            m.deviceTimeStamp if m.timestamp > c.timestamp else c.deviceTimeStamp)
+            else:
+                repl += 'Device#{0}: None'.format(d.id)
+        upd.message.reply_text(
+            repl.strip(), parse_mode=telegram.constants.PARSEMODE_HTML
+        )
+        return self.IN_MAIN_STATE
+
     def visualizeDevice(self, upd: Update, ctx: CallbackContext) -> int:
         pass
+
     def monitorDevice(self, upd: Update, ctx: CallbackContext) -> int:
-        pass
+        if len(ctx.args) != 1:
+            upd.message.reply_text('Wrong number of arguments. Use /help to get more info')
+            return self.IN_MAIN_STATE
+        try:
+            device = int(ctx.args[0])
+        except:
+            upd.message.reply_text('Wrong argument passed!')
+            return self.IN_MAIN_STATE
+
+        schat = self.subscribedChats[upd.effective_chat.id]
+        if device in schat.deviceList:
+            self.subscribedChats[upd.effective_chat.id].removeDevice(device)
+            upd.message.reply_text('You are not monitoring device#{0} anymore!'.format(device))
+            return self.IN_MAIN_STATE
+
+        self.subscribedChats[upd.effective_chat.id].appendDevice(device)
+        upd.message.reply_text('You are now monitoring device#{0}!'.format(device))
+        return self.IN_MAIN_STATE
+
 
     def broadcastMessageToChats(self, chatIds: List[int], msg: str) -> bool:
         assert len(chatIds) < 1e3, 'Too large user list, cannot run multithreaded message sending. Contact developers!'
@@ -176,8 +228,6 @@ class TelegramBot:
         for thr in threads:
             thr.join()
 
-    def broadcastMessageToSubscribers(self, msg: str) -> None:
-        self.broadcastMessageToChats(list(self.subscribedChats.keys()), msg)
-
-    def handlePacketReceived(self, packet: RemotePacket):
-        self.broadcastMessageToSubscribers(str(packet))
+    def handlePacketReceived(self, packet: RemotePacket) -> None:
+        ids = [schat.chat_id for schat in self.subscribedChats.values() if packet.remoteDevice in schat.deviceList]
+        self.broadcastMessageToChats(ids, str(packet))

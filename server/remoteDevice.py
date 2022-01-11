@@ -5,7 +5,10 @@ class RemoteDevice:
         self.id: int = id
 
     def __eq__(self, other):
-        return self.id == other.id
+        if type(other) == RemoteDevice:
+            return self.id == other.id
+        elif type(other) == int:
+            return self.id == other
 
     def __hash__(self):
         return self.id.__hash__()
@@ -14,10 +17,11 @@ class RemoteDevice:
         return 'Device#{0}'.format(self.id)
 
 class RemotePacket:
-    def __init__(self, remoteDevice: RemoteDevice, protoclVersion: int, type: int):
+    def __init__(self, remoteDevice: RemoteDevice, protoclVersion: int, type: int, datetime: dt.datetime = dt.datetime.now()):
         self.remoteDevice: RemoteDevice = remoteDevice
         self.protocolVersion: int = protoclVersion
         self.type: int = type
+        self.timestamp: dt.datetime = datetime
 
     def __str__(self):
         return '[{0} PRv{1} Type:{2}]'.format(self.remoteDevice, self.protocolVersion, self.type)
