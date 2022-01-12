@@ -1,9 +1,11 @@
 .vscode
 .idea
 config.py
+config_.py
 test.txt
 data
 moistensorbot.pickle
 __pycache__
 test_out.txt
 t.png
+*.pickle

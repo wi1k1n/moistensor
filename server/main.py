@@ -25,14 +25,16 @@ def handleSerialInput(msg: str):
 @click.option('-t', '--telegram-token', help='telegram bot token')
 @click.option('-p', '--com-port', help='name of the serial port to start listening to; auto - to autodetect')
 @click.option('-o', '--out-file', help='file for logging serial port')
-def main(telegram_token, com_port, out_file):
+@click.option('-b', '--bot-file', help='file for saving telegram bot state')
+@click.option('-d', '--database-file', help='file for saving entries')
+def main(telegram_token, com_port, out_file, bot_file, database_file):
     global bot, fLogger, deviceManager
 
-    deviceManager = DeviceManager()
+    deviceManager = DeviceManager(database_file)
 
     # Initialize Telegram bot
     if telegram_token:
-        bot = TelegramBot(telegram_token, deviceManager)
+        bot = TelegramBot(telegram_token, bot_file, deviceManager)
         bot.startBot()
     else:
         print('No telegram bot token provided! Bot has not been started!')

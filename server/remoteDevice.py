@@ -17,14 +17,14 @@ class RemoteDevice:
         return 'Device#{0}'.format(self.id)
 
 class RemotePacket:
-    def __init__(self, remoteDevice: RemoteDevice, protoclVersion: int, type: int, datetime: dt.datetime = dt.datetime.now()):
+    def __init__(self, remoteDevice: RemoteDevice, protoclVersion: int, type: int, datetime: dt.datetime=None):
         self.remoteDevice: RemoteDevice = remoteDevice
         self.protocolVersion: int = protoclVersion
         self.type: int = type
-        self.timestamp: dt.datetime = datetime
+        self.timestamp: dt.datetime = datetime if datetime else dt.datetime.now()
 
     def __str__(self):
-        return '[{0} PRv{1} Type:{2}]'.format(self.remoteDevice, self.protocolVersion, self.type)
+        return '[{3} {0} PRv{1} Type:{2}]'.format(self.remoteDevice, self.protocolVersion, self.type, self.timestamp)
 
 class RemotePacketError(RemotePacket):
     def __init__(self, remoteDevice: RemoteDevice, protoclVersion: int, type: int, msg: str):

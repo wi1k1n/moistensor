@@ -1,6 +1,7 @@
 import logging, hashlib, random, secrets, threading
-import time, datetime as dt
+import time, datetime as dt, pickle
 from typing import Dict, List, Set
+from collections.abc import Callable
 
 import telegram.constants
 from telegram import Update, User, Message
@@ -13,7 +14,9 @@ from telegram.ext import (
     ConversationHandler,
     CallbackContext,
     PicklePersistence,
+    BasePersistence
 )
+from telegram.ext.utils.types import BD
 from remoteDevice import RemotePacket, RemoteDevice
 from deviceManager import DeviceManager
 
@@ -30,11 +33,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class TGUser:
     def __init__(self, uid: int, pmChatId: int, admin: bool = False):
         self.uid: int = uid
         self.admin: bool = admin
         self.pmChatId: int = pmChatId
+
 
 class SubscribedChat:
     def __init__(self, chat_id: int):
@@ -47,10 +52,11 @@ class SubscribedChat:
     def removeDevice(self, device: RemoteDevice | int):
         self.deviceList.remove(device)
 
+
 class TelegramBot:
-    def __init__(self, _token: str, deviceManager: DeviceManager | None):
+    def __init__(self, _token: str, persistenseFileName: str, deviceManager: DeviceManager | None):
         self.TOKEN: str = _token
-        self.deviceManager: DeviceManager = deviceManager
+        self.deviceManager = deviceManager if deviceManager else DeviceManager()
 
         self.WAITING_FOR_PASSWORD,\
             self.IN_MAIN_STATE,\
@@ -58,19 +64,12 @@ class TelegramBot:
 
         self.AUTH_INITIAL_ATTEMPTS = 4
         self.SEND_MESSAGE_ATTEMPTS = 3
-        self.SEND_MESSAGE_REATTEMT_DELAY = 0.5  # in seconds
+        self.SEND_MESSAGE_REATTEMPT_DELAY = 0.5  # in seconds
 
-        self.updater: Updater = None
-        self.dispatcher: Dispatcher = None
+        self.persistence: PicklePersistence = PicklePersistence(filename=persistenseFileName)
+        self.updater: Updater = Updater(self.TOKEN, persistence=self.persistence)
+        self.dispatcher: Dispatcher = self.updater.dispatcher
 
-        self.authorizedUsers: Dict[int, TGUser] = dict()
-        self.subscribedChats: Dict[int, SubscribedChat] = dict()
-
-    def startBot(self, blockThread = False) -> None:
-        """Run the bot."""
-        # TODO: add persistence
-        self.updater = Updater(self.TOKEN)
-        self.dispatcher = self.updater.dispatcher
         self.dispatcher.add_handler(ConversationHandler(
             entry_points=[CommandHandler('start', self.start)],
             states={
@@ -87,7 +86,25 @@ class TelegramBot:
                 self.IGNORE: []
             },
             fallbacks=[],
+            name='Moistensor_v0.3',
+            persistent=True
         ))
+
+
+    @property
+    def authorizedUsers(self):
+        if not ('authorizedUsers' in self.dispatcher.bot_data):
+            self.dispatcher.bot_data['authorizedUsers'] = dict()
+        return self.dispatcher.bot_data['authorizedUsers']
+    @property
+    def subscribedChats(self):
+        if not ('subscribedChats' in self.dispatcher.bot_data):
+            self.dispatcher.bot_data['subscribedChats'] = dict()
+        return self.dispatcher.bot_data['subscribedChats']
+
+
+    def startBot(self, blockThread = False) -> None:
+        """Run the bot."""
         self.updater.start_polling()
         if blockThread:
             self.updater.idle()
@@ -101,6 +118,9 @@ class TelegramBot:
         return str(int.from_bytes(random.sample(dg, 4), 'big'))
 
     def start(self, upd: Update, ctx: CallbackContext) -> int | None:
+        if not upd.message:
+            return self.IN_MAIN_STATE
+
         if upd.effective_user.is_bot:
             return self.IGNORE
         if upd.effective_user.id in self.authorizedUsers:
@@ -136,6 +156,9 @@ class TelegramBot:
         return self.WAITING_FOR_PASSWORD
 
     def checkPassCode(self, upd: Update, ctx: CallbackContext) -> int:
+        if not upd.message:
+            return self.IN_MAIN_STATE
+
         # Assumed to not being accessible to bots and not in private chats (as handled earlier)
         admin = False
         if 'adminPassCode' in ctx.user_data and upd.message.text == ctx.user_data['adminPassCode']:
@@ -164,18 +187,29 @@ class TelegramBot:
         return self.IN_MAIN_STATE
 
     def mainMenuSink(self, upd: Update, ctx: CallbackContext) -> int:
+        if not upd.message:
+            return self.IN_MAIN_STATE
+
         upd.message.reply_text(
             'Use /help to check valid commands'
         )
         return self.IN_MAIN_STATE
 
     def showDevices(self, upd: Update, ctx: CallbackContext) -> int:
+        if not upd.message:
+            return self.IN_MAIN_STATE
+
         repl = 'List of devices:\n'
-        for (d, m, c) in self.deviceManager.devicesOverview():
+        for (d, v) in self.deviceManager.devices.items():
+            m = v.latestMeasurement
+            c = v.latestCalibration
+            l = v.entries
             if m and c:
-                repl += 'Device#{0}: <b>{2}</b> ({5}m ago) [{1} .. {3}] every {4}m ({6}m up)\n'\
+                repl += '&gt; Device#{0}: <b>{2}</b> ({5}m ago) [{1} .. {3}] every {4}m ({6}m up)\n' \
+                        '       {7} updates since {8}'\
                     .format(d.id, c.calibrationWet, m.measurement, c.calibrationDry, c.interval, round((dt.datetime.now() - m.timestamp).total_seconds() / 60),
-                            m.deviceTimeStamp if m.timestamp > c.timestamp else c.deviceTimeStamp)
+                            m.deviceTimeStamp if m.timestamp > c.timestamp else c.deviceTimeStamp,
+                            len(l), str(min(l, key=lambda x:x.timestamp).timestamp.strftime('%Y-%m-%d %H:%M:%S')))
             else:
                 repl += 'Device#{0}: None'.format(d.id)
         upd.message.reply_text(
@@ -184,9 +218,28 @@ class TelegramBot:
         return self.IN_MAIN_STATE
 
     def visualizeDevice(self, upd: Update, ctx: CallbackContext) -> int:
-        pass
+        if not upd.message:
+            return self.IN_MAIN_STATE
+
+        if len(ctx.args) != 1:
+            upd.message.reply_text('Wrong number of arguments. Use /help to get more info')
+            return self.IN_MAIN_STATE
+        try:
+            device = int(ctx.args[0])
+        except:
+            upd.message.reply_text('Wrong argument passed!')
+            return self.IN_MAIN_STATE
+        try:
+            img = self.deviceManager.deviceGraphMeasurements(device)
+            upd.message.reply_photo(img)
+        except Exception as e:
+            upd.message.reply_text('Failed to create graph. Exception: {0}'.format(e))
+        return self.IN_MAIN_STATE
 
     def monitorDevice(self, upd: Update, ctx: CallbackContext) -> int:
+        if not upd.message:
+            return self.IN_MAIN_STATE
+
         if len(ctx.args) != 1:
             upd.message.reply_text('Wrong number of arguments. Use /help to get more info')
             return self.IN_MAIN_STATE
@@ -216,7 +269,7 @@ class TelegramBot:
                     return True if m else False
                 except Exception as e:
                     print('Exception raised when sending to chat_id={0} attempt#{2}:\n\t>>{1}'.format(chatId, str(e), i))
-                    time.sleep(self.SEND_MESSAGE_REATTEMT_DELAY)
+                    time.sleep(self.SEND_MESSAGE_REATTEMPT_DELAY)
             return False
 
         threads = []
