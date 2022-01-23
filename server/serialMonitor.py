@@ -1,3 +1,5 @@
+import math
+
 import serial, time
 from collections.abc import Callable
 from util import listSerialPorts
@@ -17,16 +19,25 @@ class DataObtainer:
 
 
 class DebugMonitor(DataObtainer):
+    def __init__(self, interval: float = 5, type: str = 'sine'):
+        self.interval = interval
+        if type.lower() == 'sine':
+            self.fn = lambda x: 150 * (0.5 * math.sin(0.03 * x) + 0.5) + 200
+        else:
+            raise NotImplemented('The \'{0}\' type of signal is not implemented'.format(type))
+
     def listen(self, callback: Callable[[str], None], blockthread: bool = True) -> None:
         if not blockthread:
             raise NotImplemented('Non-blocking behavior is not implemented yet')
 
-        callback('[D9PRv1-2] v? t0m vn? vx? cd367 cw232 idx0 int1 f1')
-        time.sleep(5)
+        time.sleep(self.interval)
+        callback('[D9PRv1-2] v? t0m vn? vx? cd350 cw200 idx0 int{0} f1'.format(self.interval))
+        time.sleep(self.interval)
         startTime = time.time()
         while True:
-            callback('[D9PRv1-1] v? t{0}m m370'.format(int((time.time() - startTime) / 60)))
-            time.sleep(5)
+            deltat = time.time() - startTime
+            callback('[D9PRv1-1] v? t{0}m m{1}'.format(int(deltat / 60), self.fn(deltat)))
+            time.sleep(self.interval)
 
 class SerialMonitor(DataObtainer):
     def __init__(self):

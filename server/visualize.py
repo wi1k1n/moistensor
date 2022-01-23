@@ -4,6 +4,8 @@ from matplotlib.dates import DateFormatter
 from protocolHandler import parseMessage
 matplotlib.use('Qt5Agg')
 
+FILTEROUT_OUTDATED_CALIBRATIONS = False
+
 def parseLogFile(path: str, devices: list = None) -> set:
     data = dict()
 
@@ -41,7 +43,7 @@ data = parseLogFile(FILEPATH)
 if not len(data):
     print('No devices loaded! Check your data file!')
 
-# Sort out all entries with the outdated calibration
+
 for i, (dev, val) in enumerate(data.items()):
     data[dev] = sorted(val, key=lambda d: d['timestamp'])
     calibs = [(v, i) for i, v in enumerate(val) if v['packetType'] == 2]
@@ -49,14 +51,17 @@ for i, (dev, val) in enumerate(data.items()):
         print('No calibration entries for device#{0}'.format(dev))
         data[dev] = ([e for e in data[dev] if e['packetType'] == 1], None)
         continue
-    calibs.reverse()
-    lCalibIdx = 0  # last calibration index
-    for j, c in enumerate(calibs):
-        if c[0]['calibrDry'] != calibs[lCalibIdx][0]['calibrDry'] or c[0]['calibrWet'] != calibs[lCalibIdx][0]['calibrWet']:
-            break
-        lCalibIdx = j
-    calibration = calibs[lCalibIdx][0]
-    startIndex = calibs[lCalibIdx][-1]
+    calibration = calibs[0][0]
+    startIndex = calibs[0][-1]
+    if FILTEROUT_OUTDATED_CALIBRATIONS:  # Sort out all entries with the outdated calibration
+        calibs.reverse()
+        lCalibIdx = 0  # last calibration index
+        for j, c in enumerate(calibs):
+            if c[0]['calibrDry'] != calibs[lCalibIdx][0]['calibrDry'] or c[0]['calibrWet'] != calibs[lCalibIdx][0]['calibrWet']:
+                break
+            lCalibIdx = j
+        calibration = calibs[lCalibIdx][0]
+        startIndex = calibs[lCalibIdx][-1]
     data[dev] = ([e for k, e in enumerate(data[dev]) if k > startIndex and e['packetType'] == 1], calibration)
 
 for (dev, (l, calibr)) in data.items():

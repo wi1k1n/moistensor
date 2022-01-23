@@ -36,22 +36,26 @@ def main(telegram_token, com_port, out_file, bot_file, database_file):
     if telegram_token:
         bot = TelegramBot(telegram_token, bot_file, deviceManager)
         bot.startBot()
+        print('> Telegram bot started!')
     else:
-        print('No telegram bot token provided! Bot has not been started!')
+        print('> No telegram bot token provided! Bot has not been started!')
 
     # Initialize data obtainer
     data = DebugMonitor()
     # data: SerialMonitor = SerialMonitor()
     if com_port:
         data.setup(port=com_port)
+        print('> {0} with comport {1} started!'.format(type(data).__name__, com_port))
     else:
         data.setup()
+        print('> {0} without any comport started!'.format(type(data).__name__))
 
     # Initialize file logger
     if out_file:
         fLogger = FileLogger(out_file)
+        print('> File logging started!')
     else:
-        print('No output file specified. No logging to file enabled')
+        print('> No output file specified. No logging to file enabled')
 
     data.listen(handleSerialInput)
     bot.stopBot()
