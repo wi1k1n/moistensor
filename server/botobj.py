@@ -117,7 +117,7 @@ class TelegramBot:
         dg = hashlib.sha224(secrets.token_bytes(8) + str(usr.id).encode('utf-8')).digest()
         return str(int.from_bytes(random.sample(dg, 4), 'big'))
 
-    def start(self, upd: Update, ctx: CallbackContext) -> int | None:
+    def start(self, upd: Update, ctx: CallbackContext) -> int:
         if not upd.message:
             return self.IN_MAIN_STATE
 

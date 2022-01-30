@@ -1,8 +1,10 @@
 from botobj import TelegramBot
-from serialMonitor import SerialMonitor, DebugMonitor
+from serialMonitor import SerialMonitor, DebugMonitor, DataObtainer
 from fileLogger import FileLogger
 from deviceManager import DeviceManager
 import click, re
+
+MOISTENSOR_VERSION = '0.3'
 
 bot: TelegramBot | None = None
 fLogger: FileLogger | None = None
@@ -25,9 +27,10 @@ def handleSerialInput(msg: str):
 @click.option('-t', '--telegram-token', help='telegram bot token')
 @click.option('-p', '--com-port', help='name of the serial port to start listening to; auto - to autodetect')
 @click.option('-o', '--out-file', help='file for logging serial port')
-@click.option('-b', '--bot-file', help='file for saving telegram bot state')
-@click.option('-d', '--database-file', help='file for saving entries')
-def main(telegram_token, com_port, out_file, bot_file, database_file):
+@click.option('-b', '--bot-file', help='file for saving telegram bot state', default='tgbot.pickle')
+@click.option('-d', '--database-file', help='file for saving entries', default='db.pickle')
+@click.option('-m', '--monitor', type=click.Choice(['debug', 'serial'], case_sensitive=False), help='type of monitor to use', default='serial')
+def main(telegram_token, com_port, out_file, bot_file, database_file, monitor):
     global bot, fLogger, deviceManager
 
     deviceManager = DeviceManager(database_file)
@@ -41,14 +44,19 @@ def main(telegram_token, com_port, out_file, bot_file, database_file):
         print('> No telegram bot token provided! Bot has not been started!')
 
     # Initialize data obtainer
-    data = DebugMonitor()
-    # data: SerialMonitor = SerialMonitor()
+    data: DataObtainer | None = None
+    if monitor == 'serial':
+        data: SerialMonitor = SerialMonitor()
+    elif monitor == 'debug':
+        data: DebugMonitor = DebugMonitor()
+    else:
+        raise Exception('Unknown monitor provided: {0}'.format(monitor))
+
     if com_port:
         data.setup(port=com_port)
-        print('> {0} with comport {1} started!'.format(type(data).__name__, com_port))
     else:
         data.setup()
-        print('> {0} without any comport started!'.format(type(data).__name__))
+    print('> {0} with comport {1} started!'.format(type(data).__name__, data.port))
 
     # Initialize file logger
     if out_file:
@@ -61,4 +69,5 @@ def main(telegram_token, com_port, out_file, bot_file, database_file):
     bot.stopBot()
 
 if __name__ == '__main__':
+    print('Welcome to Moistensor v{0}'.format(MOISTENSOR_VERSION))
     main()

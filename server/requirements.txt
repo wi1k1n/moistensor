@@ -1,0 +1,4 @@
+python-telegram-bot==13.10
+matplotlib==3.5.1
+pyserial==3.5
+click==8.0.3

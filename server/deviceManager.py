@@ -3,8 +3,8 @@ import warnings
 from protocolHandler import parsePacket
 import datetime as dt, io
 from typing import Dict, List, Set, Tuple
-import matplotlib, matplotlib.pyplot as plt
-from matplotlib.dates import DateFormatter
+# import matplotlib, matplotlib.pyplot as plt
+# from matplotlib.dates import DateFormatter
 from remoteDevice import (
     RemoteDevice,
     RemotePacket,
@@ -76,23 +76,23 @@ class DeviceManager:
         with open(self.fileName, 'wb') as file:
             pickle.dump(self.devices, file)
 
-    def deviceGraphMeasurements(self, device: RemoteDevice | int) -> io.BytesIO:
-        deviceEntry = self.devices[device]
-        packets = deviceEntry.measurementsSinceLatestCalibration
-
-        x = [p.timestamp for p in packets]
-        y = [p.measurement for p in packets]
-        with warnings.catch_warnings():  # suppressing userwarning: running matplotlib not in main thread
-            warnings.filterwarnings('ignore')
-            fig, ax = plt.subplots()
-        ax.plot(x, y)
-
-        myFmt = DateFormatter("%m-%d %H:%M")
-        ax.xaxis.set_major_formatter(myFmt)
-        fig.autofmt_xdate()
+    def deviceGraphMeasurements(self, device: RemoteDevice) -> io.BytesIO:
+        # deviceEntry = self.devices[device]
+        # packets = deviceEntry.measurementsSinceLatestCalibration
+        #
+        # x = [p.timestamp for p in packets]
+        # y = [p.measurement for p in packets]
+        # with warnings.catch_warnings():  # suppressing userwarning: running matplotlib not in main thread
+        #     warnings.filterwarnings('ignore')
+        #     fig, ax = plt.subplots()
+        # ax.plot(x, y)
+        #
+        # myFmt = DateFormatter("%m-%d %H:%M")
+        # ax.xaxis.set_major_formatter(myFmt)
+        # fig.autofmt_xdate()
 
         buf = io.BytesIO()
-        plt.savefig(buf, format='png')
+        # plt.savefig(buf, format='png')
         buf.seek(0)
 
         return buf

@@ -48,7 +48,7 @@ class SerialMonitor(DataObtainer):
 
     def setup(self, port: str = None, baudrate: int = 115200, timeout: int = 10) -> bool:
         """ Takes control of the thread for setting up the """
-        self.port = None
+        self.port = port
         self.baudRate = baudrate
         self.timeout = timeout
 
@@ -85,7 +85,7 @@ class SerialMonitor(DataObtainer):
         print('The following ports are available:')
         for i, p in enumerate(ports):
             print('[' + str(i) + '] ' + p)
-        print('X - to exit')
+        print('X - to exit')  # TODO: exit from loop does not work
         print('Choose correct port (0-' + str(len(ports) - 1) + '): ', end='')
         inp = input()
         try:
