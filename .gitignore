@@ -9,3 +9,4 @@ __pycache__
 test_out.txt
 t.png
 *.pickle
+server/log.txt

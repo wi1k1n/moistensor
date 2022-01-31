@@ -77,4 +77,4 @@ def parsePacket(msg: str) -> RemotePacket:
                                            intervalIdx=safeParseInt(re.search('idx\d+', body).group()[3:]),
                                            interval=safeParseInt(re.search('int\d+', body).group()[3:]),
                                            first=bool(re.search('f\d', body).group()[1:]))
-    return RemotePacketError(None, -1, msg)
+    return RemotePacketError(None, -1, -1, msg)
